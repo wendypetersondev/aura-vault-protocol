@@ -7,6 +7,11 @@ pub enum DataKey {
     TotalShares,
     TotalDeposited,
     Balance(Address),
+    /// Monotonically-increasing version number; starts at 1 on initialize.
+    Version,
+    /// Layout fingerprint written once on initialize; checked on every upgrade
+    /// to detect storage-key collisions between versions.
+    LayoutVersion,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -86,4 +91,31 @@ pub fn bump_persistent(env: &Env, addr: &Address) {
             PERSISTENT_LIFETIME_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+}
+
+// ---------------------------------------------------------------------------
+// Version helpers (instance storage — same TTL as the rest of state)
+// ---------------------------------------------------------------------------
+
+/// Current storage layout constant. Bump this in source whenever a new
+/// DataKey variant changes an existing key's meaning.
+pub const CURRENT_LAYOUT_VERSION: u32 = 1;
+
+pub fn get_version(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::Version).unwrap_or(0)
+}
+
+pub fn set_version(env: &Env, v: u32) {
+    env.storage().instance().set(&DataKey::Version, &v);
+}
+
+pub fn get_layout_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::LayoutVersion)
+        .unwrap_or(0)
+}
+
+pub fn set_layout_version(env: &Env, v: u32) {
+    env.storage().instance().set(&DataKey::LayoutVersion, &v);
 }
