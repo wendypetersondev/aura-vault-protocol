@@ -1,0 +1,350 @@
+openapi: 3.0.3
+info:
+  title: Aura Vault Protocol — Gateway API
+  description: |
+    REST gateway that proxies reads and submits transactions to the AuraVault
+    Soroban contract on Stellar. All write endpoints build, simulate, and return
+    a signed XDR envelope — the client is responsible for final submission, or
+    may use the `/submit` endpoint.
+  version: 1.0.0
+  license:
+    name: MIT
+
+servers:
+  - url: https://api.aura-vault.xyz/v1
+    description: Production
+  - url: https://staging-api.aura-vault.xyz/v1
+    description: Staging
+
+tags:
+  - name: vault
+    description: Vault state queries
+  - name: transactions
+    description: Build and submit contract invocations
+  - name: health
+    description: Service health
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /vault/total-assets:
+    get:
+      tags: [vault]
+      summary: Total underlying tokens in the vault
+      operationId: getTotalAssets
+      responses:
+        '200':
+          description: Current total assets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TotalAssetsResponse'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+  /vault/balance/{address}:
+    get:
+      tags: [vault]
+      summary: Share balance for an address
+      operationId: getBalance
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            example: GCALLER000000000000000000000000000000000000000000000000
+          description: Stellar account address (G...)
+      responses:
+        '200':
+          description: Share balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+  /vault/deposit:
+    post:
+      tags: [transactions]
+      summary: Build a deposit transaction
+      operationId: buildDeposit
+      description: |
+        Builds and simulates a `deposit` contract invocation. Returns a
+        base64-encoded XDR transaction envelope ready for signing and submission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositRequest'
+      responses:
+        '200':
+          description: Transaction envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '422':
+          $ref: '#/components/responses/ContractError'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+  /vault/withdraw:
+    post:
+      tags: [transactions]
+      summary: Build a withdraw transaction
+      operationId: buildWithdraw
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawRequest'
+      responses:
+        '200':
+          description: Transaction envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '422':
+          $ref: '#/components/responses/ContractError'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+  /vault/harvest:
+    post:
+      tags: [transactions]
+      summary: Build a harvest transaction
+      operationId: buildHarvest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HarvestRequest'
+      responses:
+        '200':
+          description: Transaction envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '422':
+          $ref: '#/components/responses/ContractError'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+  /transactions/submit:
+    post:
+      tags: [transactions]
+      summary: Submit a signed transaction envelope
+      operationId: submitTransaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitRequest'
+      responses:
+        '200':
+          description: Transaction result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '502':
+          $ref: '#/components/responses/StellarError'
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, network, contract_id]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        network:
+          type: string
+          example: mainnet
+        contract_id:
+          type: string
+          example: CCONTRACT000000000000000000000000000000000000000000000000
+
+    TotalAssetsResponse:
+      type: object
+      required: [total_assets]
+      properties:
+        total_assets:
+          type: string
+          description: i128 value as decimal string (avoids JS number precision loss)
+          example: "10000000000"
+
+    BalanceResponse:
+      type: object
+      required: [address, shares]
+      properties:
+        address:
+          type: string
+          example: GCALLER000000000000000000000000000000000000000000000000
+        shares:
+          type: string
+          description: i128 share balance as decimal string
+          example: "500000"
+
+    DepositRequest:
+      type: object
+      required: [caller, amount]
+      properties:
+        caller:
+          type: string
+          description: Stellar address of the depositor
+          example: GCALLER000000000000000000000000000000000000000000000000
+        amount:
+          type: string
+          description: Token amount as decimal string (i128, must be > 0)
+          example: "1000000"
+
+    WithdrawRequest:
+      type: object
+      required: [caller, shares]
+      properties:
+        caller:
+          type: string
+          description: Stellar address of the withdrawer
+          example: GCALLER000000000000000000000000000000000000000000000000
+        shares:
+          type: string
+          description: Number of shares to burn as decimal string (i128, must be > 0)
+          example: "500000"
+
+    HarvestRequest:
+      type: object
+      required: [caller, yield_amount]
+      properties:
+        caller:
+          type: string
+          description: Keeper address providing yield tokens
+          example: GKEEPER000000000000000000000000000000000000000000000000
+        yield_amount:
+          type: string
+          description: Yield token amount as decimal string (i128, must be > 0)
+          example: "50000"
+
+    TransactionResponse:
+      type: object
+      required: [xdr, fee, simulation]
+      properties:
+        xdr:
+          type: string
+          description: Base64-encoded unsigned transaction XDR
+        fee:
+          type: integer
+          description: Estimated fee in stroops
+          example: 100
+        simulation:
+          type: object
+          description: Soroban simulation result
+          properties:
+            instructions:
+              type: integer
+              example: 2400000
+            read_bytes:
+              type: integer
+              example: 512
+            write_bytes:
+              type: integer
+              example: 256
+
+    SubmitRequest:
+      type: object
+      required: [signed_xdr]
+      properties:
+        signed_xdr:
+          type: string
+          description: Base64-encoded signed transaction XDR
+
+    SubmitResponse:
+      type: object
+      required: [hash, status]
+      properties:
+        hash:
+          type: string
+          description: Transaction hash
+          example: "a1b2c3..."
+        status:
+          type: string
+          enum: [pending, success, failed]
+        result_xdr:
+          type: string
+          description: Result XDR (present when status is success or failed)
+
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          example: ZERO_AMOUNT
+        message:
+          type: string
+          example: "amount must be greater than zero"
+        contract_error_code:
+          type: integer
+          description: VaultError code (1–8) when applicable
+          example: 5
+
+  responses:
+    ValidationError:
+      description: Invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    ContractError:
+      description: Contract execution rejected the transaction
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    StellarError:
+      description: Stellar / Horizon upstream error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Optional API key for rate-limit tier upgrades
+
+security: []
