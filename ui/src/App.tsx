@@ -4,6 +4,7 @@ import { WithdrawForm } from "./components/WithdrawForm";
 import { HarvestPanel } from "./components/HarvestPanel";
 import { Toast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { OnboardingFlow, hasCompletedOnboarding } from "./components/OnboardingFlow";
 import type { ToastMessage } from "./components/Toast";
 
 type Tab = "deposit" | "withdraw" | "harvest";
@@ -11,6 +12,9 @@ type Tab = "deposit" | "withdraw" | "harvest";
 export default function App() {
   const [tab, setTab] = useState<Tab>("deposit");
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => !hasCompletedOnboarding()
+  );
 
   const notify = (msg: ToastMessage) => {
     setToast(msg);
@@ -59,6 +63,10 @@ export default function App() {
       </main>
 
       {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
+
+      {showOnboarding && (
+        <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
     </ErrorBoundary>
   );
