@@ -1,7 +1,8 @@
-use soroban_sdk::{contractspecentry, Address, Env};
+use soroban_sdk::{Address, BytesN, Env};
 use crate::errors::VaultError;
 
-#[contractspecentry]
+/// Public ABI for AuraVault.  Implemented by the contract in lib.rs.
+#[allow(dead_code)]
 pub trait AuraVaultTrait {
     fn initialize(env: Env, admin: Address, underlying_token: Address) -> Result<(), VaultError>;
     fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
@@ -9,4 +10,9 @@ pub trait AuraVaultTrait {
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
     fn total_assets(env: Env) -> i128;
     fn balance_of(env: Env, address: Address) -> i128;
+    /// UUPS-style upgrade: replace the contract's Wasm with `new_wasm_hash`.
+    /// Only the admin may call this.  Emits an `upgrade` event.
+    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError>;
+    /// Returns the current monotonic version number (starts at 1 after initialize).
+    fn version(env: Env) -> u32;
 }

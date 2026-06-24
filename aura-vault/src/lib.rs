@@ -9,11 +9,13 @@ pub use errors::VaultError;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
 
 use storage::{
-    bump_instance, bump_persistent, get_admin, get_balance, get_token, get_total_deposited,
-    get_total_shares, set_admin, set_balance, set_token, set_total_deposited, set_total_shares,
+    bump_instance, bump_persistent, get_admin, get_balance, get_layout_version, get_token,
+    get_total_deposited, get_total_shares, get_version, set_admin, set_balance,
+    set_layout_version, set_token, set_total_deposited, set_total_shares, set_version,
+    CURRENT_LAYOUT_VERSION,
 };
 
 #[contract]
@@ -36,6 +38,8 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
+        set_version(&env, 1);
+        set_layout_version(&env, CURRENT_LAYOUT_VERSION);
         bump_instance(&env);
         Ok(())
     }
@@ -219,5 +223,56 @@ impl AuraVault {
     // -----------------------------------------------------------------------
     pub fn balance_of(env: Env, address: Address) -> i128 {
         get_balance(&env, &address)
+    }
+
+    // -----------------------------------------------------------------------
+    // upgrade — UUPS-style: admin-only Wasm replacement
+    // -----------------------------------------------------------------------
+    /// Replaces the contract's Wasm with `new_wasm_hash`.
+    ///
+    /// Authorization model (UUPS): the upgrade logic lives inside the contract
+    /// itself — only the stored admin may trigger it, mirroring the UUPS
+    /// pattern on EVM where the proxy logic is in the implementation contract.
+    ///
+    /// Storage-layout guard: the on-chain `LayoutVersion` must equal
+    /// `CURRENT_LAYOUT_VERSION`.  If a future Wasm bump changes the meaning
+    /// of any `DataKey` variant it must also bump `CURRENT_LAYOUT_VERSION`,
+    /// making the mismatch detectable before the Wasm swap goes live.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
+        // 1. Must be initialized
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+
+        // 2. Admin-only authorization
+        admin.require_auth();
+
+        // 3. Layout compatibility guard
+        if get_layout_version(&env) != CURRENT_LAYOUT_VERSION {
+            return Err(VaultError::StorageLayoutMismatch);
+        }
+
+        // 4. Effects: bump version before Wasm swap
+        let next_version = get_version(&env)
+            .checked_add(1)
+            .ok_or(VaultError::MathOverflow)?;
+        set_version(&env, next_version);
+        bump_instance(&env);
+
+        // 5. Emit upgrade event BEFORE swap (still in current Wasm execution context)
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"),),
+            (admin, next_version, new_wasm_hash.clone()),
+        );
+
+        // 6. Interaction: atomic Wasm replacement (point of no return)
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // version  (read-only)
+    // -----------------------------------------------------------------------
+    pub fn version(env: Env) -> u32 {
+        get_version(&env)
     }
 }
