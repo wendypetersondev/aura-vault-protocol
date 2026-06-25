@@ -8,6 +8,17 @@ export const NS = {
   API: "api",
   DEFI_PRICE: "defi:price",
   DEFI_POOLS: "defi:pools",
+  // Email service
+  EMAIL_UNSUBSCRIBED: "email:unsubscribed",
+  EMAIL_BOUNCE_HARD: "email:bounce:hard",
+  EMAIL_BOUNCE_SOFT: "email:bounce:soft",
+  EMAIL_TRACKING: "email:tracking",
+  EMAIL_QUEUE_HIGH: "email:queue:high",
+  EMAIL_QUEUE_NORMAL: "email:queue:normal",
+  EMAIL_QUEUE_LOW: "email:queue:low",
+  EMAIL_RETRY: "email:retry",
+  EMAIL_DEAD: "email:dead",
+  EMAIL_INFLIGHT: "email:inflight",
 } as const;
 
 export type Namespace = (typeof NS)[keyof typeof NS];

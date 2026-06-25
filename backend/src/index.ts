@@ -10,6 +10,7 @@ import {
   revokeAllSessions,
   type Tier,
 } from "./auth.js";
+import { authenticate } from "./middleware/authMiddleware.js";
 import { cacheMiddleware } from "./middleware/cacheMiddleware.js";
 import {
   globalIpRateLimiter,
@@ -18,6 +19,8 @@ import {
 } from "./middleware/rateLimitMiddleware.js";
 import { getAssetPrice, getPools, warmCache } from "./services/defi.js";
 import { getCacheStats } from "./cache.js";
+import { emailRouter } from "./routes/emailRoutes.js";
+import { startEmailWorker, stopEmailWorker } from "./services/emailQueue.js";
 
 const app = express();
 app.use(cors());
@@ -25,25 +28,6 @@ app.use(express.json());
 
 // Global IP rate limiter — health check excluded so load-balancer probes are not throttled
 app.use(globalIpRateLimiter(["/api/health"]));
-
-async function authenticate(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): Promise<void> {
-  const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Missing token" });
-    return;
-  }
-  const payload = await validateAccessToken(header.slice(7));
-  if (!payload) {
-    res.status(401).json({ error: "Invalid or expired token" });
-    return;
-  }
-  (req as any).user = payload;
-  next();
-}
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -119,6 +103,10 @@ app.get("/api/cache/stats", async (_req, res) => {
   res.json({ stats });
 });
 
+// ── Email ─────────────────────────────────────────────────────────────────────
+
+app.use("/api/email", emailRouter);
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get("/api/health", async (_req, res) => {
@@ -133,9 +121,18 @@ app.get("/api/health", async (_req, res) => {
 // ── Startup ───────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log(`Aura Vault backend running on port ${PORT}`);
   await warmCache();
+  startEmailWorker();
 });
+
+// Graceful shutdown
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, () => {
+    stopEmailWorker();
+    server.close(() => process.exit(0));
+  });
+}
 
 export default app;
