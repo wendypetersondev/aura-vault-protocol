@@ -410,3 +410,126 @@ fn test_balance_of_distinct_addresses_no_collision() {
     // addr_b deposited into a non-empty vault so shares = floor(2M * 1M / 1M) = 2_000_000
     assert_eq!(vault.balance_of(&addr_b), 2_000_000);
 }
+
+
+// ---------------------------------------------------------------------------
+// Governance tests
+// ---------------------------------------------------------------------------
+
+fn setup_multisig() -> (Env, AuraVaultClient<'static>, Vec<Address>, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let signer1 = Address::generate(&env);
+    let signer2 = Address::generate(&env);
+    let signer3 = Address::generate(&env);
+    let signer4 = Address::generate(&env);
+    let signer5 = Address::generate(&env);
+
+    let signers = std::vec![signer1, signer2, signer3, signer4, signer5];
+
+    let token_address = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    let vault_address = env.register_contract(None, AuraVault);
+    let vault = AuraVaultClient::new(&env, &vault_address);
+
+    vault.initialize(&admin, &token_address, &signers);
+
+    (env, vault, signers, admin, token_address)
+}
+
+#[test]
+fn test_governance_init_with_signers() {
+    let (_env, _vault, signers, _admin, _token) = setup_multisig();
+    assert_eq!(signers.len(), 5);
+}
+
+#[test]
+fn test_propose_admin_update() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let new_admin = Address::generate(&env);
+
+    let result = vault.try_propose_update_admin(&signers[0], &new_admin);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_non_signer_cannot_propose() {
+    let (env, vault, _signers, _admin, _token) = setup_multisig();
+    let non_signer = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    let result = vault.try_propose_update_admin(&non_signer, &new_admin);
+    assert_eq!(result, Err(Ok(VaultError::InvalidAddress)));
+}
+
+#[test]
+fn test_vote_on_proposal() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let new_admin = Address::generate(&env);
+
+    let proposal_id = vault.propose_update_admin(&signers[0], &new_admin);
+    assert_eq!(proposal_id, 1);
+
+    let result = vault.try_vote(&signers[1], &proposal_id, &true);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_approval_with_three_votes() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let new_admin = Address::generate(&env);
+
+    let proposal_id = vault.propose_update_admin(&signers[0], &new_admin);
+
+    vault.vote(&signers[0], &proposal_id, &true);
+    vault.vote(&signers[1], &proposal_id, &true);
+    let result = vault.proposal_status(&proposal_id);
+    
+    // After 3rd vote, status should be "Approved"
+    vault.vote(&signers[2], &proposal_id, &true);
+    let status = vault.proposal_status(&proposal_id);
+    assert_eq!(status, Some("Approved".to_string()));
+}
+
+#[test]
+fn test_timelock_prevents_early_execution() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let new_admin = Address::generate(&env);
+
+    let proposal_id = vault.propose_update_admin(&signers[0], &new_admin);
+
+    vault.vote(&signers[0], &proposal_id, &true);
+    vault.vote(&signers[1], &proposal_id, &true);
+    vault.vote(&signers[2], &proposal_id, &true);
+
+    // Try to execute before timelock
+    let result = vault.try_execute(&signers[0], &proposal_id);
+    assert_eq!(result, Err(Ok(VaultError::InvalidAddress)));
+}
+
+#[test]
+fn test_parameter_proposal() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+
+    let result = vault.try_propose_parameter_update(
+        &signers[0],
+        &soroban_sdk::Symbol::short("fee_rate"),
+        &100,
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_cannot_vote_twice() {
+    let (env, vault, signers, _admin, _token) = setup_multisig();
+    let new_admin = Address::generate(&env);
+
+    let proposal_id = vault.propose_update_admin(&signers[0], &new_admin);
+    
+    vault.vote(&signers[0], &proposal_id, &true);
+    
+    // Try to vote again
+    let result = vault.try_vote(&signers[0], &proposal_id, &false);
+    assert_eq!(result, Err(Ok(VaultError::InvalidAddress)));
+}

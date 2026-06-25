@@ -3,17 +3,22 @@
 mod errors;
 mod interface;
 mod storage;
+mod governance;
 
 pub use errors::VaultError;
 
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec, Symbol};
 
 use storage::{
     bump_instance, bump_persistent, get_admin, get_balance, get_token, get_total_deposited,
     get_total_shares, set_admin, set_balance, set_token, set_total_deposited, set_total_shares,
+};
+use governance::{
+    initialize_governance, create_proposal, vote_on_proposal, execute_proposal,
+    get_proposal_status, ProposalStatus, ProposalType,
 };
 
 #[contract]
@@ -28,6 +33,7 @@ impl AuraVault {
         env: Env,
         admin: Address,
         underlying_token: Address,
+        signers: Vec<Address>,
     ) -> Result<(), VaultError> {
         if get_admin(&env).is_some() {
             return Err(VaultError::AlreadyInitialized);
@@ -36,6 +42,7 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
+        initialize_governance(&env, signers)?;
         bump_instance(&env);
         Ok(())
     }
@@ -219,5 +226,56 @@ impl AuraVault {
     // -----------------------------------------------------------------------
     pub fn balance_of(env: Env, address: Address) -> i128 {
         get_balance(&env, &address)
+    }
+
+    // -----------------------------------------------------------------------
+    // Governance Methods
+    // -----------------------------------------------------------------------
+
+    pub fn propose_update_admin(env: Env, proposer: Address, new_admin: Address) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateAdmin)
+    }
+
+    pub fn propose_update_token(env: Env, proposer: Address, new_token: Address) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateUnderlyingToken)
+    }
+
+    pub fn propose_parameter_update(
+        env: Env,
+        proposer: Address,
+        name: Symbol,
+        value: i128,
+    ) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateParameter { name, value })
+    }
+
+    pub fn vote(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        approve: bool,
+    ) -> Result<(), VaultError> {
+        vote_on_proposal(&env, voter, proposal_id, approve)
+    }
+
+    pub fn execute(
+        env: Env,
+        executor: Address,
+        proposal_id: u64,
+    ) -> Result<(), VaultError> {
+        execute_proposal(&env, executor, proposal_id)?;
+        bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn proposal_status(env: Env, proposal_id: u64) -> Option<String> {
+        get_proposal_status(&env, proposal_id).map(|status| {
+            match status {
+                ProposalStatus::Pending => "Pending".to_string(),
+                ProposalStatus::Approved => "Approved".to_string(),
+                ProposalStatus::Executed => "Executed".to_string(),
+                ProposalStatus::Rejected => "Rejected".to_string(),
+            }
+        })
     }
 }
