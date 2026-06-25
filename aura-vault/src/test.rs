@@ -813,7 +813,7 @@ fn test_withdraw_excess_by_one_returns_insufficient_shares() {
     let user = Address::generate(&env);
     mint(&env, &token, &admin, &user, 1_000);
     vault.deposit(&user, &1_000);
-    let result = vault.try_withdraw(&user, &1_001);
+     let result = vault.try_withdraw(&user, &1_001);
     assert_eq!(result, Err(Ok(VaultError::InsufficientShares)));
 }
 
