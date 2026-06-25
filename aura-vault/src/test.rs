@@ -508,3 +508,61 @@ fn test_upgrade_can_be_called_multiple_times() {
         assert_eq!(vault.version(), expected_version);
     }
 }
+
+// ---------------------------------------------------------------------------
+// 12. Emergency pause
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_pause_blocks_deposit() {
+    let (env, vault, _admin, _token) = setup();
+    vault.pause();
+    let user = Address::generate(&env);
+    let result = vault.try_deposit(&user, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_pause_blocks_withdraw() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000);
+    vault.deposit(&user, &1_000);
+    vault.pause();
+    let result = vault.try_withdraw(&user, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_pause_blocks_harvest() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000);
+    vault.deposit(&user, &1_000);
+    vault.pause();
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 500);
+    let result = vault.try_harvest(&keeper, &500);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_unpause_restores_operations() {
+    let (env, vault, admin, token) = setup();
+    vault.pause();
+    vault.unpause();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000);
+    let minted = vault.deposit(&user, &1_000);
+    assert_eq!(minted, 1_000);
+}
+
+#[test]
+fn test_is_paused_reflects_state() {
+    let (_env, vault, _admin, _token) = setup();
+    assert!(!vault.is_paused());
+    vault.pause();
+    assert!(vault.is_paused());
+    vault.unpause();
+    assert!(!vault.is_paused());
+}

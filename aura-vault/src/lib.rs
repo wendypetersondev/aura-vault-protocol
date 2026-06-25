@@ -13,9 +13,9 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
 
 use storage::{
     bump_instance, bump_persistent, get_admin, get_balance, get_layout_version, get_token,
-    get_total_deposited, get_total_shares, get_version, set_admin, set_balance,
-    set_layout_version, set_token, set_total_deposited, set_total_shares, set_version,
-    CURRENT_LAYOUT_VERSION,
+    get_total_deposited, get_total_shares, get_version, is_paused as storage_is_paused, set_admin,
+    set_balance, set_layout_version, set_paused, set_token, set_total_deposited, set_total_shares,
+    set_version, CURRENT_LAYOUT_VERSION,
 };
 
 #[contract]
@@ -56,13 +56,28 @@ impl AuraVault {
         if get_admin(&env).is_none() {
             return Err(VaultError::NotInitialized);
         }
+        if storage_is_paused(&env) {
+            return Err(VaultError::VaultPaused);
+        }
+
+        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+        let token = token::Client::new(&env, &token_addr);
+
+        // Flash-loan guard: actual token balance must equal tracked state before deposit.
+        let balance_before = token.balance(&env.current_contract_address());
+        let total_deposited = get_total_deposited(&env);
+        if balance_before != total_deposited {
+            env.events().publish(
+                (Symbol::new(&env, "suspicious"),),
+                (Symbol::new(&env, "balance_mismatch"), balance_before, total_deposited),
+            );
+            return Err(VaultError::BalanceMismatch);
+        }
 
         let total_shares = get_total_shares(&env);
-        let total_deposited = get_total_deposited(&env);
 
         // Compute shares to mint (checked arithmetic, overflow returns MathOverflow)
         let new_shares: i128 = if total_shares == 0 || total_deposited == 0 {
-            // 1:1 seeding — first depositor
             amount
         } else {
             let numerator = amount
@@ -73,18 +88,12 @@ impl AuraVault {
                 .ok_or(VaultError::MathOverflow)?
         };
 
-        // Inflation-attack fence: reject if formula rounds down to zero shares
         if new_shares <= 0 {
             return Err(VaultError::ZeroAmount);
         }
 
-        // CEI — Interaction first: pull tokens from caller into vault
-        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
-        token::Client::new(&env, &token_addr).transfer(
-            &caller,
-            &env.current_contract_address(),
-            &amount,
-        );
+        // CEI — Interaction: pull tokens from caller into vault
+        token.transfer(&caller, &env.current_contract_address(), &amount);
 
         // Effects: write state after successful transfer
         let old_balance = get_balance(&env, &caller);
@@ -100,6 +109,11 @@ impl AuraVault {
             total_deposited
                 .checked_add(amount)
                 .ok_or(VaultError::MathOverflow)?,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "deposit"),),
+            (caller, amount, new_shares),
         );
 
         bump_persistent(&env, &caller);
@@ -120,6 +134,23 @@ impl AuraVault {
         if get_admin(&env).is_none() {
             return Err(VaultError::NotInitialized);
         }
+        if storage_is_paused(&env) {
+            return Err(VaultError::VaultPaused);
+        }
+
+        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+        let token = token::Client::new(&env, &token_addr);
+
+        // Flash-loan guard: actual token balance must equal tracked state.
+        let balance_before = token.balance(&env.current_contract_address());
+        let total_deposited = get_total_deposited(&env);
+        if balance_before != total_deposited {
+            env.events().publish(
+                (Symbol::new(&env, "suspicious"),),
+                (Symbol::new(&env, "balance_mismatch"), balance_before, total_deposited),
+            );
+            return Err(VaultError::BalanceMismatch);
+        }
 
         let user_balance = get_balance(&env, &caller);
         if shares > user_balance {
@@ -127,9 +158,7 @@ impl AuraVault {
         }
 
         let total_shares = get_total_shares(&env);
-        let total_deposited = get_total_deposited(&env);
 
-        // Compute redemption amount
         let numerator = shares
             .checked_mul(total_deposited)
             .ok_or(VaultError::MathOverflow)?;
@@ -160,11 +189,11 @@ impl AuraVault {
         );
 
         // Interaction: send tokens to caller after state is settled
-        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
-        token::Client::new(&env, &token_addr).transfer(
-            &env.current_contract_address(),
-            &caller,
-            &redeem_amount,
+        token.transfer(&env.current_contract_address(), &caller, &redeem_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "withdraw"),),
+            (caller, shares, redeem_amount),
         );
 
         bump_persistent(&env, &caller);
@@ -185,6 +214,9 @@ impl AuraVault {
         if get_admin(&env).is_none() {
             return Err(VaultError::NotInitialized);
         }
+        if storage_is_paused(&env) {
+            return Err(VaultError::VaultPaused);
+        }
 
         let total_shares = get_total_shares(&env);
         if total_shares == 0 {
@@ -192,23 +224,63 @@ impl AuraVault {
         }
 
         let total_deposited = get_total_deposited(&env);
+
+        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+        let token = token::Client::new(&env, &token_addr);
+
+        // Flash-loan guard: actual token balance must equal tracked state before harvest.
+        let balance_before = token.balance(&env.current_contract_address());
+        if balance_before != total_deposited {
+            env.events().publish(
+                (Symbol::new(&env, "suspicious"),),
+                (Symbol::new(&env, "balance_mismatch"), balance_before, total_deposited),
+            );
+            return Err(VaultError::BalanceMismatch);
+        }
+
         let new_total = total_deposited
             .checked_add(yield_amount)
             .ok_or(VaultError::MathOverflow)?;
 
         // Interaction: pull yield tokens into vault
-        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
-        token::Client::new(&env, &token_addr).transfer(
-            &caller,
-            &env.current_contract_address(),
-            &yield_amount,
-        );
+        token.transfer(&caller, &env.current_contract_address(), &yield_amount);
 
         // Effect: increase total deposited — no new shares minted
         set_total_deposited(&env, new_total);
+
+        env.events().publish(
+            (Symbol::new(&env, "harvest"),),
+            (caller, yield_amount),
+        );
+
         bump_instance(&env);
 
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // pause / unpause — admin-only emergency controls
+    // -----------------------------------------------------------------------
+    pub fn pause(env: Env) -> Result<(), VaultError> {
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+        set_paused(&env, true);
+        env.events().publish((Symbol::new(&env, "paused"),), ());
+        bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn unpause(env: Env) -> Result<(), VaultError> {
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+        set_paused(&env, false);
+        env.events().publish((Symbol::new(&env, "unpaused"),), ());
+        bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        storage_is_paused(&env)
     }
 
     // -----------------------------------------------------------------------

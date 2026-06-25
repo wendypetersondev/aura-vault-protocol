@@ -12,6 +12,8 @@ pub enum DataKey {
     /// Layout fingerprint written once on initialize; checked on every upgrade
     /// to detect storage-key collisions between versions.
     LayoutVersion,
+    /// Emergency pause flag — when true, deposit/withdraw/harvest are blocked.
+    Paused,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -118,4 +120,16 @@ pub fn get_layout_version(env: &Env) -> u32 {
 
 pub fn set_layout_version(env: &Env, v: u32) {
     env.storage().instance().set(&DataKey::LayoutVersion, &v);
+}
+
+// ---------------------------------------------------------------------------
+// Pause helpers (instance storage)
+// ---------------------------------------------------------------------------
+
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+}
+
+pub fn set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::Paused, &paused);
 }
