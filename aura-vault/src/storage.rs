@@ -16,8 +16,6 @@ pub enum DataKey {
     MgmtFeeBps,
     TotalFeeCollected,
     LastMgmtFeeTime,
-    /// Whitelisted alternate yield token (Issue #48 multi-token support).
-    YieldToken(Address),
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
