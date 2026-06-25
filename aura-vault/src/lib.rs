@@ -9,6 +9,9 @@ pub use errors::VaultError;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod fuzz;
+
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
 
 use storage::{
