@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface Settings {
   slippageTolerance: number;
@@ -65,6 +66,17 @@ export default function SettingsPage() {
             Settings saved
           </div>
         )}
+
+        {/* Appearance */}
+        <section className="mb-8">
+          <h2 className="text-lg font-medium mb-3">Appearance</h2>
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-3">
+              Choose your preferred color theme.
+            </p>
+            <ThemeToggle />
+          </div>
+        </section>
 
         {/* Wallet Info */}
         <section className="mb-8">
