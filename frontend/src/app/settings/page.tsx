@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface Settings {
   slippageTolerance: number;
@@ -56,8 +57,8 @@ export default function SettingsPage() {
   const slippageOptions = [0.1, 0.5, 1.0, 3.0];
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100">
-      <div className="max-w-2xl mx-auto px-4 py-12">
+    <div className="min-h-screen bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100 py-8">
+      <div className="max-w-2xl mx-auto w-full px-4 py-8 sm:px-6 sm:py-12">
         <h1 className="text-2xl font-semibold mb-8">Settings</h1>
 
         {saved && (
@@ -66,12 +67,23 @@ export default function SettingsPage() {
           </div>
         )}
 
+        {/* Appearance */}
+        <section className="mb-8">
+          <h2 className="text-lg font-medium mb-3">Appearance</h2>
+          <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-3">
+              Choose your preferred color theme.
+            </p>
+            <ThemeToggle />
+          </div>
+        </section>
+
         {/* Wallet Info */}
         <section className="mb-8">
           <h2 className="text-lg font-medium mb-3">Connected Wallet</h2>
           <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 p-4 bg-white dark:bg-zinc-900">
             <p className="text-sm text-zinc-500">No wallet connected</p>
-            <button className="mt-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors">
+            <button className="mt-3 w-full rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors sm:w-auto">
               Connect Wallet
             </button>
           </div>
@@ -80,12 +92,12 @@ export default function SettingsPage() {
         {/* Slippage */}
         <section className="mb-8">
           <h2 className="text-lg font-medium mb-3">Slippage Tolerance</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {slippageOptions.map((val) => (
               <button
                 key={val}
                 onClick={() => update("slippageTolerance", val)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium border transition-colors ${
+                className={`w-full rounded-lg px-4 py-2 text-sm font-medium border transition-colors sm:w-auto ${
                   settings.slippageTolerance === val
                     ? "bg-indigo-600 text-white border-indigo-600"
                     : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 hover:border-indigo-400"
