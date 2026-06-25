@@ -101,19 +101,16 @@ impl AuraVault {
 
         // Effects: write state after successful transfer
         let old_balance = get_balance(&env, &caller);
-        set_balance(&env, &caller, old_balance + new_shares);
-        set_total_shares(
-            &env,
-            total_shares
-                .checked_add(new_shares)
-                .ok_or(VaultError::MathOverflow)?,
-        );
-        set_total_deposited(
-            &env,
-            total_deposited
-                .checked_add(amount)
-                .ok_or(VaultError::MathOverflow)?,
-        );
+        let new_balance = old_balance + new_shares;
+        set_balance(&env, &caller, new_balance);
+        let new_total_shares = total_shares
+            .checked_add(new_shares)
+            .ok_or(VaultError::MathOverflow)?;
+        set_total_shares(&env, new_total_shares);
+        let new_total_deposited = total_deposited
+            .checked_add(amount)
+            .ok_or(VaultError::MathOverflow)?;
+        set_total_deposited(&env, new_total_deposited);
 
         env.events().publish(
             (Symbol::new(&env, "deposit"),),
@@ -122,6 +119,12 @@ impl AuraVault {
 
         bump_persistent(&env, &caller);
         bump_instance(&env);
+
+        // FIX-3: Emit event for off-chain indexers and monitoring
+        env.events().publish(
+            (Symbol::new(&env, "deposit"),),
+            (caller, amount, new_shares, new_total_shares, new_total_deposited),
+        );
 
         Ok(new_shares)
     }
@@ -178,19 +181,16 @@ impl AuraVault {
         }
 
         // CEI — Effects first: burn shares before token transfer
-        set_balance(&env, &caller, user_balance - shares);
-        set_total_shares(
-            &env,
-            total_shares
-                .checked_sub(shares)
-                .ok_or(VaultError::MathOverflow)?,
-        );
-        set_total_deposited(
-            &env,
-            total_deposited
-                .checked_sub(redeem_amount)
-                .ok_or(VaultError::MathOverflow)?,
-        );
+        let new_balance = user_balance - shares;
+        set_balance(&env, &caller, new_balance);
+        let new_total_shares = total_shares
+            .checked_sub(shares)
+            .ok_or(VaultError::MathOverflow)?;
+        set_total_shares(&env, new_total_shares);
+        let new_total_deposited = total_deposited
+            .checked_sub(redeem_amount)
+            .ok_or(VaultError::MathOverflow)?;
+        set_total_deposited(&env, new_total_deposited);
 
         // Interaction: send tokens to caller after state is settled
         token.transfer(&env.current_contract_address(), &caller, &redeem_amount);
@@ -202,6 +202,12 @@ impl AuraVault {
 
         bump_persistent(&env, &caller);
         bump_instance(&env);
+
+        // FIX-3: Emit event for off-chain indexers and monitoring
+        env.events().publish(
+            (Symbol::new(&env, "withdraw"),),
+            (caller, shares, redeem_amount, new_total_shares, new_total_deposited),
+        );
 
         Ok(redeem_amount)
     }
@@ -220,6 +226,16 @@ impl AuraVault {
         }
         if storage_is_paused(&env) {
             return Err(VaultError::VaultPaused);
+        }
+
+        // FIX-2: Only the admin may call harvest.
+        // Permissionless harvest allows any token-holder to inflate total_deposited
+        // without sending real yield, or to grief by triggering dust rounding at
+        // will.  Restricting to admin (or a keeper registry added later) closes
+        // the open-access vector without affecting the happy-path workflow.
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if caller != admin {
+            return Err(VaultError::HarvestUnauthorized);
         }
 
         let total_shares = get_total_shares(&env);
@@ -302,18 +318,29 @@ impl AuraVault {
     }
 
     // -----------------------------------------------------------------------
+    // transfer_admin — FIX-6: admin is no longer immutable
+    // -----------------------------------------------------------------------
+    /// Transfers admin role to `new_admin`.  Only the current admin may call
+    /// this.  Emits a `admin_transferred` event so monitors can detect a
+    /// privilege hand-off immediately.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VaultError> {
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+
+        set_admin(&env, &new_admin);
+        bump_instance(&env);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin_transferred"),),
+            (admin, new_admin),
+        );
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // upgrade — UUPS-style: admin-only Wasm replacement
     // -----------------------------------------------------------------------
-    /// Replaces the contract's Wasm with `new_wasm_hash`.
-    ///
-    /// Authorization model (UUPS): the upgrade logic lives inside the contract
-    /// itself — only the stored admin may trigger it, mirroring the UUPS
-    /// pattern on EVM where the proxy logic is in the implementation contract.
-    ///
-    /// Storage-layout guard: the on-chain `LayoutVersion` must equal
-    /// `CURRENT_LAYOUT_VERSION`.  If a future Wasm bump changes the meaning
-    /// of any `DataKey` variant it must also bump `CURRENT_LAYOUT_VERSION`,
-    /// making the mismatch detectable before the Wasm swap goes live.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
         // 1. Must be initialized
         let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
