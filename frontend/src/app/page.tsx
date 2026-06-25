@@ -1,4 +1,5 @@
 import WalletConnect from "@/components/WalletConnect";
+import VaultActions from "@/components/VaultActions";
 
 export default function Home() {
   return (
@@ -13,6 +14,9 @@ export default function Home() {
       </header>
       <section className="w-full">
         <WalletConnect />
+      </section>
+      <section className="w-full">
+        <VaultActions />
       </section>
     </main>
   );
