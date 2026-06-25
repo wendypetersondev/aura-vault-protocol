@@ -1,7 +1,7 @@
 import { useState, lazy, Suspense } from "react";
 import { Toast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { Skeleton } from "./components/Skeleton";
+import { OnboardingFlow, hasCompletedOnboarding } from "./components/OnboardingFlow";
 import type { ToastMessage } from "./components/Toast";
 
 const DepositForm = lazy(() => import("./components/DepositForm").then((m) => ({ default: m.DepositForm })));
@@ -13,6 +13,9 @@ type Tab = "deposit" | "withdraw" | "harvest";
 export default function App() {
   const [tab, setTab] = useState<Tab>("deposit");
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(
+    () => !hasCompletedOnboarding()
+  );
 
   const notify = (msg: ToastMessage) => setToast(msg);
 
@@ -60,8 +63,12 @@ export default function App() {
           </div>
         </main>
 
-        {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
-      </div>
+      {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
+
+      {showOnboarding && (
+        <OnboardingFlow onComplete={() => setShowOnboarding(false)} />
+      )}
+    </div>
     </ErrorBoundary>
   );
 }
