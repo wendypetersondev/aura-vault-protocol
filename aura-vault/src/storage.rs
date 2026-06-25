@@ -7,11 +7,14 @@ pub enum DataKey {
     TotalShares,
     TotalDeposited,
     Balance(Address),
-    /// Monotonically-increasing version number; starts at 1 on initialize.
     Version,
-    /// Layout fingerprint written once on initialize; checked on every upgrade
-    /// to detect storage-key collisions between versions.
     LayoutVersion,
+    // Fee-related keys
+    Treasury,
+    PerfFeeBps,
+    MgmtFeeBps,
+    TotalFeeCollected,
+    LastMgmtFeeTime,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -71,6 +74,50 @@ pub fn set_balance(env: &Env, addr: &Address, val: i128) {
     env.storage()
         .persistent()
         .set(&DataKey::Balance(addr.clone()), &val);
+}
+
+// ---------------------------------------------------------------------------
+// Fee storage helpers (instance storage)
+// ---------------------------------------------------------------------------
+
+pub fn get_treasury(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Treasury)
+}
+
+pub fn set_treasury(env: &Env, treasury: &Address) {
+    env.storage().instance().set(&DataKey::Treasury, treasury);
+}
+
+pub fn get_perf_fee_bps(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::PerfFeeBps).unwrap_or(1000)
+}
+
+pub fn set_perf_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::PerfFeeBps, &bps);
+}
+
+pub fn get_mgmt_fee_bps(env: &Env) -> u32 {
+    env.storage().instance().get(&DataKey::MgmtFeeBps).unwrap_or(0)
+}
+
+pub fn set_mgmt_fee_bps(env: &Env, bps: u32) {
+    env.storage().instance().set(&DataKey::MgmtFeeBps, &bps);
+}
+
+pub fn get_total_fee_collected(env: &Env) -> i128 {
+    env.storage().instance().get(&DataKey::TotalFeeCollected).unwrap_or(0)
+}
+
+pub fn set_total_fee_collected(env: &Env, val: i128) {
+    env.storage().instance().set(&DataKey::TotalFeeCollected, &val);
+}
+
+pub fn get_last_mgmt_fee_time(env: &Env) -> u64 {
+    env.storage().instance().get(&DataKey::LastMgmtFeeTime).unwrap_or(0)
+}
+
+pub fn set_last_mgmt_fee_time(env: &Env, time: u64) {
+    env.storage().instance().set(&DataKey::LastMgmtFeeTime, &time);
 }
 
 // ---------------------------------------------------------------------------
