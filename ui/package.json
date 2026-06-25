@@ -7,8 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "bundle:analyze": "tsc -b && vite build --mode analyze",
     "test": "vitest run",
-    "test:a11y": "vitest run src/tests/a11y"
+    "test:a11y": "vitest run src/tests/a11y",
+    "test:load": "vitest run src/tests/load.test.ts",
+    "test:load:k6": "k6 run src/tests/load.k6.ts"
   },
   "dependencies": {
     "react": "18.3.1",
@@ -28,6 +31,7 @@
     "vite": "6.0.7",
     "vitest": "2.1.8",
     "jest-axe": "9.0.0",
-    "@types/jest-axe": "3.5.9"
+    "@types/jest-axe": "3.5.9",
+    "rollup-plugin-visualizer": "5.12.0"
   }
 }

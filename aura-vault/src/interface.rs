@@ -8,6 +8,9 @@ pub trait AuraVaultTrait {
     fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError>;
     fn withdraw(env: Env, caller: Address, shares: i128) -> Result<i128, VaultError>;
     fn harvest(env: Env, caller: Address, yield_amount: i128) -> Result<(), VaultError>;
+    fn pause(env: Env) -> Result<(), VaultError>;
+    fn unpause(env: Env) -> Result<(), VaultError>;
+    fn is_paused(env: Env) -> bool;
     fn total_assets(env: Env) -> i128;
     fn balance_of(env: Env, address: Address) -> i128;
     /// Transfer admin role to a new address.  Only the current admin may call this.
