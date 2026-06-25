@@ -92,6 +92,9 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Aura Vault backend running on port ${PORT}`);
