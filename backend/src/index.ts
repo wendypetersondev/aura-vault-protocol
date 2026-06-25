@@ -10,17 +10,7 @@ import {
   revokeAllSessions,
   type Tier,
 } from "./auth.js";
-import { authenticate } from "./middleware/authMiddleware.js";
-import { cacheMiddleware } from "./middleware/cacheMiddleware.js";
-import {
-  globalIpRateLimiter,
-  authRateLimiter,
-  userRateLimiter,
-} from "./middleware/rateLimitMiddleware.js";
-import { getAssetPrice, getPools, warmCache } from "./services/defi.js";
-import { getCacheStats } from "./cache.js";
-import { emailRouter } from "./routes/emailRoutes.js";
-import { startEmailWorker, stopEmailWorker } from "./services/emailQueue.js";
+import { webhookRouter } from "./webhook.js";
 
 const app = express();
 app.use(cors());
@@ -73,55 +63,20 @@ app.post("/api/auth/revoke-all", authenticate, userRateLimiter(), async (req, re
   res.json({ success: true });
 });
 
-// ── DeFi ─────────────────────────────────────────────────────────────────────
+// Webhook management (authenticated)
+app.use("/api/webhooks", authenticate, webhookRouter);
 
-const PRICE_TTL = parseInt(process.env.CACHE_DEFI_PRICE_TTL || "30", 10);
-const POOL_TTL = parseInt(process.env.CACHE_DEFI_POOL_TTL || "60", 10);
-
-app.get("/api/defi/price/:asset", cacheMiddleware(PRICE_TTL), async (req, res) => {
-  try {
-    const price = await getAssetPrice(req.params.asset as string);
-    res.json(price);
-  } catch (err: any) {
-    res.status(404).json({ error: err.message });
-  }
+// Health check
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.get("/api/defi/pools", cacheMiddleware(POOL_TTL), async (req, res) => {
-  try {
-    const pools = await getPools();
-    res.json({ pools });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Cache metrics ─────────────────────────────────────────────────────────────
-
-app.get("/api/cache/stats", async (_req, res) => {
-  const stats = await getCacheStats();
-  res.json({ stats });
-});
-
-// ── Email ─────────────────────────────────────────────────────────────────────
-
-app.use("/api/email", emailRouter);
-
-// ── Health ────────────────────────────────────────────────────────────────────
-
-app.get("/api/health", async (_req, res) => {
-  const redisOk = await pingRedis();
-  res.json({
-    status: "ok",
-    redis: redisOk ? "ok" : "error",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// ── Startup ───────────────────────────────────────────────────────────────────
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
 
 const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, async () => {
+app.listen(PORT, () => {
+  startWorker();
   console.log(`Aura Vault backend running on port ${PORT}`);
   await warmCache();
   startEmailWorker();
