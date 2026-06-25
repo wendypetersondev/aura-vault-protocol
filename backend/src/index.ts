@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
+import { pingRedis } from "./redis.js";
 import {
   generateTokens,
   validateAccessToken,
@@ -8,53 +8,37 @@ import {
   logout,
   getUserSessions,
   revokeAllSessions,
+  type Tier,
 } from "./auth.js";
+import { webhookRouter } from "./webhook.js";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { error: "Too many auth requests, try again later" },
-});
+// Global IP rate limiter — health check excluded so load-balancer probes are not throttled
+app.use(globalIpRateLimiter(["/api/health"]));
 
-// Auth middleware
-function authenticate(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Missing token" });
-    return;
-  }
-  const payload = validateAccessToken(header.slice(7));
-  if (!payload) {
-    res.status(401).json({ error: "Invalid or expired token" });
-    return;
-  }
-  (req as any).user = payload;
-  next();
-}
+// ── Auth ─────────────────────────────────────────────────────────────────────
 
-// POST /api/auth/login — wallet-based login
-app.post("/api/auth/login", authLimiter, (req, res) => {
-  const { walletAddress, deviceId } = req.body;
+app.post("/api/auth/login", authRateLimiter(), async (req, res) => {
+  const { walletAddress, deviceId, tier } = req.body;
   if (!walletAddress) {
     res.status(400).json({ error: "walletAddress required" });
     return;
   }
-  const tokens = generateTokens(walletAddress, deviceId);
+  const validTier: Tier = tier === "paid" ? "paid" : "free";
+  const tokens = await generateTokens(walletAddress, deviceId, validTier);
   res.json(tokens);
 });
 
-// POST /api/auth/refresh
-app.post("/api/auth/refresh", authLimiter, (req, res) => {
+app.post("/api/auth/refresh", authRateLimiter(), async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     res.status(400).json({ error: "refreshToken required" });
     return;
   }
-  const tokens = refreshAccessToken(refreshToken);
+  const tokens = await refreshAccessToken(refreshToken);
   if (!tokens) {
     res.status(401).json({ error: "Invalid or expired refresh token" });
     return;
@@ -62,35 +46,48 @@ app.post("/api/auth/refresh", authLimiter, (req, res) => {
   res.json(tokens);
 });
 
-// POST /api/auth/logout
-app.post("/api/auth/logout", authenticate, (req, res) => {
+app.post("/api/auth/logout", authenticate, userRateLimiter(), async (req, res) => {
   const token = req.headers.authorization!.slice(7);
   const { refreshToken } = req.body;
-  logout(token, refreshToken);
+  await logout(token, refreshToken);
   res.json({ success: true });
 });
 
-// GET /api/auth/sessions
-app.get("/api/auth/sessions", authenticate, (req, res) => {
-  const user = (req as any).user;
-  res.json({ sessions: getUserSessions(user.sub) });
+app.get("/api/auth/sessions", authenticate, userRateLimiter(), async (req, res) => {
+  const sessions = await getUserSessions((req as any).user.sub);
+  res.json({ sessions });
 });
 
-// POST /api/auth/revoke-all
-app.post("/api/auth/revoke-all", authenticate, (req, res) => {
-  const user = (req as any).user;
-  revokeAllSessions(user.sub);
+app.post("/api/auth/revoke-all", authenticate, userRateLimiter(), async (req, res) => {
+  await revokeAllSessions((req as any).user.sub);
   res.json({ success: true });
 });
+
+// Webhook management (authenticated)
+app.use("/api/webhooks", authenticate, webhookRouter);
 
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
+  startWorker();
   console.log(`Aura Vault backend running on port ${PORT}`);
+  await warmCache();
+  startEmailWorker();
 });
+
+// Graceful shutdown
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, () => {
+    stopEmailWorker();
+    server.close(() => process.exit(0));
+  });
+}
 
 export default app;

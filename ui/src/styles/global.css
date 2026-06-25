@@ -246,6 +246,13 @@ body {
   font-size: 0.75rem;
 }
 
+/* ── Field hint — #63 WCAG 2.1 AA ─────────────────────────────────────── */
+.field-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin-top: var(--sp-1);
+}
+
 /* ── Buttons — #99 hover + press animations ─────────────────────────────── */
 .btn {
   display: inline-flex;

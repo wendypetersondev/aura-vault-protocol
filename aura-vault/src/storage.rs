@@ -11,6 +11,11 @@ pub enum DataKey {
     LayoutVersion,
     /// Emergency pause flag — when true, deposit/withdraw/harvest are blocked.
     Paused,
+    Treasury,
+    PerfFeeBps,
+    MgmtFeeBps,
+    TotalFeeCollected,
+    LastMgmtFeeTime,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;
@@ -114,6 +119,23 @@ pub fn get_last_mgmt_fee_time(env: &Env) -> u64 {
 
 pub fn set_last_mgmt_fee_time(env: &Env, time: u64) {
     env.storage().instance().set(&DataKey::LastMgmtFeeTime, &time);
+}
+
+// ---------------------------------------------------------------------------
+// Yield-token whitelist helpers (instance storage — Issue #48)
+// ---------------------------------------------------------------------------
+
+pub fn is_yield_token(env: &Env, token: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::YieldToken(token.clone()))
+        .unwrap_or(false)
+}
+
+pub fn set_yield_token(env: &Env, token: &Address, enabled: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::YieldToken(token.clone()), &enabled);
 }
 
 // ---------------------------------------------------------------------------

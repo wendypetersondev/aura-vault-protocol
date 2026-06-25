@@ -77,14 +77,14 @@ export default function FAQPage() {
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-8 flex flex-col gap-8 sm:flex-row">
+      <div className="max-w-3xl mx-auto w-full px-4 py-8 sm:px-6 lg:px-8 flex flex-col gap-8 lg:flex-row">
         {/* Category sidebar */}
-        <nav className="sm:w-48 shrink-0">
-          <ul className="flex flex-row flex-wrap gap-2 sm:flex-col sm:gap-1">
-            <li>
+        <nav className="w-full sm:w-48 shrink-0">
+          <ul className="flex flex-row flex-wrap gap-2 overflow-x-auto rounded-xl border border-black/[.08] bg-white/80 p-2 dark:border-white/[.12] dark:bg-zinc-950/70 sm:flex-col sm:gap-1 sm:p-0">
+            <li className="min-w-[140px] sm:min-w-0">
               <button
                 onClick={() => { setActiveCategory("all"); setOpenId(null); }}
-                className={`w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors ${
+                className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
                   activeCategory === "all"
                     ? "bg-black/[.06] dark:bg-white/[.08] font-medium"
                     : "hover:bg-black/[.04] dark:hover:bg-white/[.05]"
@@ -97,10 +97,10 @@ export default function FAQPage() {
             {cats.map((cat) => {
               const count = items.filter((i) => i.category === cat.id).length;
               return (
-                <li key={cat.id}>
+                <li key={cat.id} className="min-w-[140px] sm:min-w-0">
                   <button
                     onClick={() => { setActiveCategory(cat.id); setOpenId(null); }}
-                    className={`w-full text-left px-3 py-1.5 rounded-md text-sm transition-colors ${
+                    className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
                       activeCategory === cat.id
                         ? "bg-black/[.06] dark:bg-white/[.08] font-medium"
                         : "hover:bg-black/[.04] dark:hover:bg-white/[.05]"

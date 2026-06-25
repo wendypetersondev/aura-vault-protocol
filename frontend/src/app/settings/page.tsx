@@ -100,7 +100,7 @@ export default function SettingsPage() {
               <button
                 key={val}
                 onClick={() => update("slippageTolerance", val)}
-                className={`rounded-lg px-4 py-2 text-sm font-medium border transition-colors ${
+                className={`w-full rounded-lg px-4 py-2 text-sm font-medium border transition-colors sm:w-auto ${
                   settings.slippageTolerance === val
                     ? "bg-indigo-600 text-white border-indigo-600"
                     : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700 hover:border-indigo-400"
