@@ -9,6 +9,7 @@ import {
   getUserSessions,
   revokeAllSessions,
 } from "./auth.js";
+import portfolioRouter from "./portfolio.js";
 
 const app = express();
 app.use(cors());
@@ -87,6 +88,9 @@ app.post("/api/auth/revoke-all", authenticate, (req, res) => {
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
