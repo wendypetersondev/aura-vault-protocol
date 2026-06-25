@@ -301,6 +301,63 @@ fn test_harvest_by_non_admin_returns_harvest_unauthorized() {
     assert_eq!(result, Err(Ok(VaultError::HarvestUnauthorized)));
 }
 
+#[test]
+fn test_pause_blocks_mutating_operations() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 1_000_000);
+
+    // Pause the vault and verify deposit, withdraw, harvest fail with VaultPaused
+    vault.pause(&admin).unwrap();
+    assert_eq!(vault.try_deposit(&user, &1_000_000), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(vault.try_withdraw(&user, &1), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(vault.try_harvest(&admin, &1_000_000), Err(Ok(VaultError::VaultPaused)));
+
+    vault.unpause(&admin).unwrap();
+    vault.deposit(&user, &1_000_000);
+    assert_eq!(vault.balance_of(&user), 1_000_000);
+}
+
+#[test]
+fn test_harvest_collects_performance_fee_and_records_total_fees() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    vault.set_fees(&admin, 1000, 0).unwrap();
+    vault.set_treasury(&admin, &admin).unwrap();
+    mint(&env, &token, &admin, &admin, 1_000_000);
+
+    vault.harvest(&admin, &1_000_000).unwrap();
+
+    assert_eq!(vault.total_assets(), 1_900_000);
+    assert_eq!(vault.total_fees_collected(), 100_000);
+}
+
+#[test]
+fn test_withdraw_fees_transfers_to_treasury_and_resets_total_fees() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    vault.set_fees(&admin, 1000, 0).unwrap();
+    vault.set_treasury(&admin, &treasury).unwrap();
+    mint(&env, &token, &admin, &admin, 1_000_000);
+
+    vault.harvest(&admin, &1_000_000).unwrap();
+    let withdrawn = vault.withdraw_fees(&admin).unwrap();
+
+    assert_eq!(withdrawn, 100_000);
+    assert_eq!(vault.total_fees_collected(), 0);
+    assert_eq!(StellarAssetClient::new(&env, &token).balance(&treasury), 100_000);
+}
+
 // ---------------------------------------------------------------------------
 // 7. Deposit-withdraw round-trip (verifies rounding bound of ±1)
 // ---------------------------------------------------------------------------

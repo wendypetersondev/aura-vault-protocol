@@ -11,6 +11,11 @@ pub enum DataKey {
     LayoutVersion,
     /// Emergency pause flag — when true, deposit/withdraw/harvest are blocked.
     Paused,
+    Treasury,
+    PerfFeeBps,
+    MgmtFeeBps,
+    TotalFeeCollected,
+    LastMgmtFeeTime,
 }
 
 pub const DAY_IN_LEDGERS: u32 = 17_280;

@@ -263,6 +263,18 @@ impl AuraVault {
             return Err(VaultError::BalanceMismatch);
         }
 
+        let perf_fee_bps = storage::get_perf_fee_bps(&env);
+        let _mgmt_fee_bps = storage::get_mgmt_fee_bps(&env);
+        let perf_fee = fee::calc_perf_fee(yield_amount, perf_fee_bps)?;
+        let yield_after_fee = yield_amount
+            .checked_sub(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+
+        let current_fees = storage::get_total_fee_collected(&env);
+        let new_fees = current_fees
+            .checked_add(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+
         let new_total = total_deposited
             .checked_add(yield_after_fee)
             .ok_or(VaultError::MathOverflow)?;
@@ -272,6 +284,7 @@ impl AuraVault {
 
         // Effect: increase total deposited with yield after fees, record fees
         set_total_deposited(&env, new_total);
+        storage::set_total_fee_collected(&env, new_fees);
 
         env.events().publish(
             (Symbol::new(&env, "harvest"),),
