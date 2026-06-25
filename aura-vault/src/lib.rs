@@ -148,7 +148,12 @@ impl AuraVault {
         let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
         let token = token::Client::new(&env, &token_addr);
 
-        // Flash-loan guard: actual token balance must equal tracked state.
+        // Withdrawal queue guard (flash-loan prevention): the vault's actual
+        // on-chain token balance must equal the internally tracked
+        // `total_deposited` before any withdrawal is processed.  If an
+        // attacker flash-loans tokens into the vault to inflate
+        // `balance_before`, this check fires and the transaction reverts,
+        // preventing share-price manipulation attacks.
         let balance_before = token.balance(&env.current_contract_address());
         let total_deposited = get_total_deposited(&env);
         if balance_before != total_deposited {
