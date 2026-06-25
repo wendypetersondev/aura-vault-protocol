@@ -97,6 +97,7 @@ app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
+  startWorker();
   console.log(`Aura Vault backend running on port ${PORT}`);
 });
 
