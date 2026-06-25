@@ -1,0 +1,335 @@
+openapi: 3.0.3
+
+info:
+  title: Aura Vault — REST API
+  version: "1.0.0"
+  description: |
+    Backend REST API for the Aura Vault Protocol.
+
+    ## Authentication
+    All protected endpoints require a Bearer JWT access token obtained from
+    `POST /api/auth/login`.  Access tokens expire after **15 minutes**.
+    Use `POST /api/auth/refresh` to obtain a new pair without re-authenticating.
+
+    ## Rate Limiting
+    Auth endpoints (`/api/auth/*`) are limited to **20 requests per 15 minutes**
+    per IP address.  Exceeding this returns `429 Too Many Requests`.
+
+    ## Base URL
+    | Environment | Base URL |
+    |---|---|
+    | Local | `http://localhost:3001` |
+    | Testnet | `https://api-testnet.auravault.xyz` |
+    | Mainnet | `https://api.auravault.xyz` |
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+  - url: https://api-testnet.auravault.xyz
+    description: Stellar Testnet
+  - url: https://api.auravault.xyz
+    description: Stellar Mainnet
+
+tags:
+  - name: Auth
+    description: Wallet-based authentication and session management
+  - name: Health
+    description: Service health checks
+
+paths:
+  # ---------------------------------------------------------------------------
+  # Auth
+  # ---------------------------------------------------------------------------
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with wallet address
+      description: |
+        Authenticate using a Stellar wallet address.  Returns an access token
+        (15 min expiry) and a refresh token (30 days expiry).
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              walletAddress: "GABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRST"
+              deviceId: "device-uuid-1234"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+              example:
+                accessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                expiresIn: 900
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      description: |
+        Exchange a valid refresh token for a new access + refresh token pair.
+        The old refresh token is invalidated (token rotation).
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+            example:
+              refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        "200":
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout current session
+      description: |
+        Blacklists the current access token and (optionally) revokes the
+        provided refresh token.  The access token must be supplied as a
+        Bearer token in the `Authorization` header.
+      operationId: logout
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+            example:
+              refreshToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        "200":
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                success: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/sessions:
+    get:
+      tags: [Auth]
+      summary: List active sessions
+      description: |
+        Returns the list of active session IDs for the authenticated wallet.
+        Useful for multi-device session management.
+      operationId: getSessions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Active sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsResponse"
+              example:
+                sessions:
+                  - "550e8400-e29b-41d4-a716-446655440000"
+                  - "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/auth/revoke-all:
+    post:
+      tags: [Auth]
+      summary: Revoke all sessions
+      description: |
+        Invalidates every active session for the authenticated wallet.
+        Use this when a device is lost or compromised.
+      operationId: revokeAllSessions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: All sessions revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+              example:
+                success: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Health
+  # ---------------------------------------------------------------------------
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns the service status and current server timestamp. No authentication required.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: "ok"
+                timestamp: "2026-06-25T13:00:00.000Z"
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token obtained from `POST /api/auth/login`.
+        Pass as `Authorization: Bearer <token>`.
+
+  schemas:
+    LoginRequest:
+      type: object
+      required: [walletAddress]
+      properties:
+        walletAddress:
+          type: string
+          description: Stellar public key (G... address) of the authenticating wallet.
+          example: "GABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRST"
+        deviceId:
+          type: string
+          description: Optional device identifier for multi-device session tracking.
+          example: "device-uuid-1234"
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          description: A valid, non-expired refresh token.
+
+    LogoutRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: Optional refresh token to also invalidate on logout.
+
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken, expiresIn]
+      properties:
+        accessToken:
+          type: string
+          description: Short-lived JWT for authenticating API requests (15 min).
+        refreshToken:
+          type: string
+          description: Long-lived JWT for obtaining new access tokens (30 days).
+        expiresIn:
+          type: integer
+          description: Access token lifetime in seconds.
+          example: 900
+
+    SessionsResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of active session IDs for the authenticated wallet.
+
+    SuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    HealthResponse:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          description: Server UTC timestamp at time of request.
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "walletAddress required"
+
+  responses:
+    BadRequest:
+      description: Invalid or missing request parameters
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "walletAddress required"
+
+    Unauthorized:
+      description: Missing, invalid, or expired token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            MissingToken:
+              value:
+                error: "Missing token"
+            InvalidToken:
+              value:
+                error: "Invalid or expired token"
+            ExpiredRefresh:
+              value:
+                error: "Invalid or expired refresh token"
+
+    RateLimited:
+      description: Too many requests — auth rate limit exceeded (20 req / 15 min)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "Too many auth requests, try again later"
