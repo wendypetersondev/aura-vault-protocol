@@ -3,6 +3,7 @@
 mod errors;
 mod interface;
 mod storage;
+mod fee;
 
 pub use errors::VaultError;
 
@@ -242,13 +243,13 @@ impl AuraVault {
         }
 
         let new_total = total_deposited
-            .checked_add(yield_amount)
+            .checked_add(yield_after_fee)
             .ok_or(VaultError::MathOverflow)?;
 
         // Interaction: pull yield tokens into vault
         token.transfer(&caller, &env.current_contract_address(), &yield_amount);
 
-        // Effect: increase total deposited — no new shares minted
+        // Effect: increase total deposited with yield after fees, record fees
         set_total_deposited(&env, new_total);
 
         env.events().publish(
@@ -349,5 +350,67 @@ impl AuraVault {
     // -----------------------------------------------------------------------
     pub fn version(env: Env) -> u32 {
         get_version(&env)
+    }
+
+    // -----------------------------------------------------------------------
+    // Fee Management Functions
+    // -----------------------------------------------------------------------
+    
+    /// Set performance and management fees (admin only)
+    pub fn set_fees(env: Env, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError> {
+        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+        
+        fee::validate_fees(perf_fee_bps, mgmt_fee_bps)?;
+        
+        storage::set_perf_fee_bps(&env, perf_fee_bps);
+        storage::set_mgmt_fee_bps(&env, mgmt_fee_bps);
+        storage::bump_instance(&env);
+        
+        Ok(())
+    }
+
+    /// Set treasury address (admin only)
+    pub fn set_treasury(env: Env, treasury: Address) -> Result<(), VaultError> {
+        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+        
+        storage::set_treasury(&env, &treasury);
+        storage::bump_instance(&env);
+        
+        Ok(())
+    }
+
+    /// Get current fee settings
+    pub fn get_fees(env: Env) -> (u32, u32) {
+        (storage::get_perf_fee_bps(&env), storage::get_mgmt_fee_bps(&env))
+    }
+
+    /// Get total fees collected
+    pub fn total_fees_collected(env: Env) -> i128 {
+        storage::get_total_fee_collected(&env)
+    }
+
+    /// Withdraw fees to treasury (admin only)
+    pub fn withdraw_fees(env: Env) -> Result<i128, VaultError> {
+        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+        
+        let treasury = storage::get_treasury(&env).ok_or(VaultError::InvalidAddress)?;
+        let fees = storage::get_total_fee_collected(&env);
+        
+        if fees > 0 {
+            let token_addr = storage::get_token(&env).ok_or(VaultError::NotInitialized)?;
+            token::Client::new(&env, &token_addr).transfer(
+                &env.current_contract_address(),
+                &treasury,
+                &fees,
+            );
+            
+            storage::set_total_fee_collected(&env, 0);
+            storage::bump_instance(&env);
+        }
+        
+        Ok(fees)
     }
 }
