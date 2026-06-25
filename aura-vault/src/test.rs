@@ -1590,3 +1590,307 @@ fn test_harvest_zero_from_uninit_returns_zero_amount() {
     let result = vault.try_harvest(&keeper, &0);
     assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
 }
+
+// ===========================================================================
+// NEW TESTS — Batch 5: yield distribution edge cases, pause, balance-mismatch
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Yield distribution — proportionality and precision
+// ---------------------------------------------------------------------------
+
+/// Three depositors with a 1:2:3 ratio each receive yield proportional to
+/// their share of the pool.
+#[test]
+fn test_yield_distributed_proportionally_1_2_3() {
+    let (env, vault, admin, token) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    mint(&env, &token, &admin, &bob, 2_000_000);
+    mint(&env, &token, &admin, &carol, 3_000_000);
+
+    vault.deposit(&alice, &1_000_000);
+    vault.deposit(&bob, &2_000_000);
+    vault.deposit(&carol, &3_000_000);
+
+    // Harvest 6_000_000 → doubles the pool (6M → 12M)
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 6_000_000);
+    vault.harvest(&keeper, &6_000_000);
+
+    let alice_shares = vault.balance_of(&alice);
+    let bob_shares   = vault.balance_of(&bob);
+    let carol_shares = vault.balance_of(&carol);
+
+    let alice_out = vault.withdraw(&alice, &alice_shares);
+    let bob_out   = vault.withdraw(&bob, &bob_shares);
+    let carol_out = vault.withdraw(&carol, &carol_shares);
+
+    // Expected: 2M, 4M, 6M (doubling of original deposit)
+    assert_eq!(alice_out, 2_000_000);
+    assert_eq!(bob_out, 4_000_000);
+    assert_eq!(carol_out, 6_000_000);
+}
+
+/// A user who deposits AFTER a harvest should NOT capture any of that past yield.
+#[test]
+fn test_late_depositor_does_not_capture_prior_yield() {
+    let (env, vault, admin, token) = setup();
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    vault.deposit(&alice, &1_000_000);
+
+    // Harvest 1_000_000 → alice's share is now worth 2 tokens each
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 1_000_000);
+    vault.harvest(&keeper, &1_000_000);
+
+    // Bob deposits AFTER the harvest; same token amount → fewer shares
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &bob, 1_000_000);
+    let bob_shares = vault.deposit(&bob, &1_000_000);
+    // Bob gets floor(1M * 1M / 2M) = 500_000 shares
+    assert_eq!(bob_shares, 500_000);
+
+    // Each user withdraws everything; alice should get 2M, bob 1M
+    let alice_out = vault.withdraw(&alice, &vault.balance_of(&alice));
+    let bob_out   = vault.withdraw(&bob, &vault.balance_of(&bob));
+    assert_eq!(alice_out, 2_000_000);
+    assert_eq!(bob_out, 1_000_000);
+}
+
+/// Successive harvests accumulate correctly — the exchange rate compounds
+/// after each harvest.
+#[test]
+fn test_successive_harvests_compound_exchange_rate() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    let keeper = Address::generate(&env);
+    // Three harvests of 1_000_000 each
+    for _ in 0..3 {
+        mint(&env, &token, &admin, &keeper, 1_000_000);
+        vault.harvest(&keeper, &1_000_000);
+    }
+
+    // total_assets should be 4_000_000
+    assert_eq!(vault.total_assets(), 4_000_000);
+    let received = vault.withdraw(&user, &vault.balance_of(&user));
+    assert_eq!(received, 4_000_000);
+}
+
+/// With many depositors, total_assets after harvest equals sum of all
+/// individual redemption values (within rounding of 1 per user).
+#[test]
+fn test_yield_total_redemptions_equals_total_assets() {
+    let (env, vault, admin, token) = setup();
+    let n: i128 = 5;
+    let users: std::vec::Vec<Address> = (0..n).map(|_| Address::generate(&env)).collect();
+    for u in &users {
+        mint(&env, &token, &admin, u, 1_000_000);
+        vault.deposit(u, &1_000_000);
+    }
+
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 5_000_000);
+    vault.harvest(&keeper, &5_000_000);
+
+    let total_before = vault.total_assets();
+    let mut total_received: i128 = 0;
+    for u in &users {
+        let s = vault.balance_of(u);
+        total_received += vault.withdraw(u, &s);
+    }
+
+    // Rounding allows at most n−1 stroops of loss vs tracked total
+    assert!(total_received >= total_before - n + 1);
+}
+
+/// Depositing 1 token into a vault with a very unfavorable exchange rate
+/// (tiny shares to assets) should return ZeroAmount, not panic.
+#[test]
+fn test_yield_tiny_deposit_after_massive_harvest_errors() {
+    let (env, vault, admin, token) = setup();
+    let seeder = Address::generate(&env);
+    mint(&env, &token, &admin, &seeder, 1);
+    vault.deposit(&seeder, &1); // 1 share, 1 asset
+
+    // Harvest 999_999 to make rate = 1_000_000 tokens per share
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 999_999);
+    vault.harvest(&keeper, &999_999);
+
+    // Depositing 1 token → floor(1 * 1 / 1_000_000) = 0 shares → ZeroAmount
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1);
+    let result = vault.try_deposit(&user, &1);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+/// Harvest by zero amount returns ZeroAmount (guard fires before ZeroShares).
+#[test]
+fn test_yield_harvest_zero_errors_before_zero_shares_check() {
+    let (env, vault, admin, token) = setup();
+    // Empty vault (no depositors) — ZeroAmount must fire before ZeroShares
+    let keeper = Address::generate(&env);
+    let result = vault.try_harvest(&keeper, &0);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+    let _ = (admin, token);
+}
+
+/// Two equal depositors withdraw after yield; each redeems half the pool.
+#[test]
+fn test_yield_two_equal_depositors_split_yield_equally() {
+    let (env, vault, admin, token) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    mint(&env, &token, &admin, &bob, 1_000_000);
+    vault.deposit(&alice, &1_000_000);
+    vault.deposit(&bob, &1_000_000);
+
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 2_000_000);
+    vault.harvest(&keeper, &2_000_000);
+
+    let alice_out = vault.withdraw(&alice, &vault.balance_of(&alice));
+    let bob_out   = vault.withdraw(&bob, &vault.balance_of(&bob));
+    // Pool: 4M → each gets 2M
+    assert_eq!(alice_out, 2_000_000);
+    assert_eq!(bob_out, 2_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// Pause / Unpause
+// ---------------------------------------------------------------------------
+
+/// deposit is blocked when vault is paused.
+#[test]
+fn test_pause_blocks_deposit() {
+    let (env, vault, _admin, token) = setup();
+    vault.pause();
+    let user = Address::generate(&env);
+    mint(&env, &token, &_admin, &user, 1_000_000);
+    let result = vault.try_deposit(&user, &1_000_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+/// withdraw is blocked when vault is paused.
+#[test]
+fn test_pause_blocks_withdraw() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+    vault.pause();
+    let result = vault.try_withdraw(&user, &1_000_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+/// harvest is blocked when vault is paused.
+#[test]
+fn test_pause_blocks_harvest() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+    vault.pause();
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 100_000);
+    let result = vault.try_harvest(&keeper, &100_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+/// After unpause, all operations resume normally.
+#[test]
+fn test_unpause_resumes_all_operations() {
+    let (env, vault, admin, token) = setup();
+    vault.pause();
+    vault.unpause();
+
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 500_000);
+    vault.harvest(&keeper, &500_000);
+
+    let received = vault.withdraw(&user, &vault.balance_of(&user));
+    assert_eq!(received, 1_500_000);
+}
+
+/// is_paused reflects pause/unpause state correctly.
+#[test]
+fn test_is_paused_reflects_state() {
+    let (_env, vault, _admin, _token) = setup();
+    assert!(!vault.is_paused());
+    vault.pause();
+    assert!(vault.is_paused());
+    vault.unpause();
+    assert!(!vault.is_paused());
+}
+
+// ---------------------------------------------------------------------------
+// BalanceMismatch (flash-loan guard) — injected balance discrepancy
+// ---------------------------------------------------------------------------
+
+/// Directly minting tokens into the vault contract (bypassing deposit) skews
+/// balance_before vs total_deposited → deposit must return BalanceMismatch.
+#[test]
+fn test_balance_mismatch_deposit_blocked_when_balance_skewed() {
+    let (env, vault, admin, token) = setup();
+
+    // Seed the vault legitimately first
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    vault.deposit(&alice, &1_000_000);
+
+    // Mint extra tokens directly into the vault address (simulates flash-loan donation)
+    mint(&env, &token, &admin, &vault.address, 1);
+
+    // Next deposit should detect the mismatch
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &bob, 1_000_000);
+    let result = vault.try_deposit(&bob, &1_000_000);
+    assert_eq!(result, Err(Ok(VaultError::BalanceMismatch)));
+}
+
+/// Directly minting into vault address causes withdraw to return BalanceMismatch.
+#[test]
+fn test_balance_mismatch_withdraw_blocked_when_balance_skewed() {
+    let (env, vault, admin, token) = setup();
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    vault.deposit(&alice, &1_000_000);
+
+    // Inject tokens directly — skews tracked state
+    mint(&env, &token, &admin, &vault.address, 500);
+
+    let result = vault.try_withdraw(&alice, &1_000_000);
+    assert_eq!(result, Err(Ok(VaultError::BalanceMismatch)));
+}
+
+/// Directly minting into vault address causes harvest to return BalanceMismatch.
+#[test]
+fn test_balance_mismatch_harvest_blocked_when_balance_skewed() {
+    let (env, vault, admin, token) = setup();
+
+    let alice = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    vault.deposit(&alice, &1_000_000);
+
+    // Inject tokens directly — skews tracked state
+    mint(&env, &token, &admin, &vault.address, 1);
+
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 100_000);
+    let result = vault.try_harvest(&keeper, &100_000);
+    assert_eq!(result, Err(Ok(VaultError::BalanceMismatch)));
+}
