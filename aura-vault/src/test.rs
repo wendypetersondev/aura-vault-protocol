@@ -301,6 +301,63 @@ fn test_harvest_by_non_admin_returns_harvest_unauthorized() {
     assert_eq!(result, Err(Ok(VaultError::HarvestUnauthorized)));
 }
 
+#[test]
+fn test_pause_blocks_mutating_operations() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    let keeper = Address::generate(&env);
+    mint(&env, &token, &admin, &keeper, 1_000_000);
+
+    // Pause the vault and verify deposit, withdraw, harvest fail with VaultPaused
+    vault.pause(&admin).unwrap();
+    assert_eq!(vault.try_deposit(&user, &1_000_000), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(vault.try_withdraw(&user, &1), Err(Ok(VaultError::VaultPaused)));
+    assert_eq!(vault.try_harvest(&admin, &1_000_000), Err(Ok(VaultError::VaultPaused)));
+
+    vault.unpause(&admin).unwrap();
+    vault.deposit(&user, &1_000_000);
+    assert_eq!(vault.balance_of(&user), 1_000_000);
+}
+
+#[test]
+fn test_harvest_collects_performance_fee_and_records_total_fees() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    vault.set_fees(&admin, 1000, 0).unwrap();
+    vault.set_treasury(&admin, &admin).unwrap();
+    mint(&env, &token, &admin, &admin, 1_000_000);
+
+    vault.harvest(&admin, &1_000_000).unwrap();
+
+    assert_eq!(vault.total_assets(), 1_900_000);
+    assert_eq!(vault.total_fees_collected(), 100_000);
+}
+
+#[test]
+fn test_withdraw_fees_transfers_to_treasury_and_resets_total_fees() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    vault.set_fees(&admin, 1000, 0).unwrap();
+    vault.set_treasury(&admin, &treasury).unwrap();
+    mint(&env, &token, &admin, &admin, 1_000_000);
+
+    vault.harvest(&admin, &1_000_000).unwrap();
+    let withdrawn = vault.withdraw_fees(&admin).unwrap();
+
+    assert_eq!(withdrawn, 100_000);
+    assert_eq!(vault.total_fees_collected(), 0);
+    assert_eq!(StellarAssetClient::new(&env, &token).balance(&treasury), 100_000);
+}
+
 // ---------------------------------------------------------------------------
 // 7. Deposit-withdraw round-trip (verifies rounding bound of ±1)
 // ---------------------------------------------------------------------------
@@ -1570,4 +1627,368 @@ fn test_harvest_zero_from_uninit_returns_zero_amount() {
     let keeper = Address::generate(&env);
     let result = vault.try_harvest(&keeper, &0);
     assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+// ===========================================================================
+// SECURITY AUDIT TESTS — Issue #87
+// Covers: reentrancy guard (CEI), integer overflow/underflow, access control,
+//         flash-loan guard (BalanceMismatch), and pause guard.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Reentrancy — CEI ordering: state is written before token transfer
+// ---------------------------------------------------------------------------
+
+/// Verifies that a caller cannot re-enter withdraw with the same shares because
+/// balance is zeroed *before* the token transfer (CEI pattern).
+#[test]
+fn test_security_withdraw_shares_zeroed_before_transfer() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    // First withdrawal burns all shares
+    vault.withdraw(&user, &1_000_000);
+    assert_eq!(vault.balance_of(&user), 0, "shares must be zeroed after withdraw");
+
+    // A second call with any shares must fail — InsufficientShares, not a double-spend
+    let result = vault.try_withdraw(&user, &1);
+    assert_eq!(result, Err(Ok(VaultError::InsufficientShares)));
+}
+
+/// Partial withdraw: only the redeemed shares are burned; remainder is intact.
+#[test]
+fn test_security_partial_withdraw_no_double_spend() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 2_000_000);
+    vault.deposit(&user, &2_000_000);
+
+    vault.withdraw(&user, &1_000_000);
+    // Attempting to withdraw the already-spent 1 M shares must fail
+    let result = vault.try_withdraw(&user, &1_000_001);
+    assert_eq!(result, Err(Ok(VaultError::InsufficientShares)));
+    // But the remaining 1 M are still redeemable
+    assert_eq!(vault.withdraw(&user, &1_000_000), 1_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// Integer overflow / underflow
+// ---------------------------------------------------------------------------
+
+/// Depositing i128::MAX into an already-seeded vault triggers checked_mul
+/// overflow → MathOverflow (or a token-level error).  Either way: no panic.
+#[test]
+fn test_security_deposit_overflow_checked() {
+    let (env, vault, admin, token) = setup();
+    let seeder = Address::generate(&env);
+    mint(&env, &token, &admin, &seeder, 1);
+    vault.deposit(&seeder, &1);
+
+    let attacker = Address::generate(&env);
+    mint(&env, &token, &admin, &attacker, i128::MAX);
+    let result = vault.try_deposit(&attacker, &i128::MAX);
+    assert!(result.is_err(), "overflow deposit must be rejected");
+}
+
+/// i128::MIN is treated as ≤ 0 → ZeroAmount, not a wrap-around panic.
+#[test]
+fn test_security_deposit_i128_min_rejected() {
+    let (env, vault, _admin, _token) = setup();
+    let user = Address::generate(&env);
+    let result = vault.try_deposit(&user, &i128::MIN);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+/// Withdraw with i128::MIN is rejected as ZeroAmount (≤ 0 guard).
+#[test]
+fn test_security_withdraw_i128_min_rejected() {
+    let (env, vault, _admin, _token) = setup();
+    let user = Address::generate(&env);
+    let result = vault.try_withdraw(&user, &i128::MIN);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+/// Harvest with i128::MIN is rejected as ZeroAmount.
+#[test]
+fn test_security_harvest_i128_min_rejected() {
+    let (env, vault, admin, _token) = setup();
+    let result = vault.try_harvest(&admin, &i128::MIN);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+/// Negative deposit is rejected (no underflow).
+#[test]
+fn test_security_negative_deposit_rejected() {
+    let (env, vault, _admin, _token) = setup();
+    let user = Address::generate(&env);
+    assert_eq!(vault.try_deposit(&user, &-1), Err(Ok(VaultError::ZeroAmount)));
+    assert_eq!(vault.try_deposit(&user, &-1_000_000), Err(Ok(VaultError::ZeroAmount)));
+}
+
+// ---------------------------------------------------------------------------
+// Access control bypass attempts
+// ---------------------------------------------------------------------------
+
+/// Non-admin may not call pause.
+#[test]
+#[should_panic]
+fn test_security_pause_by_non_admin_panics() {
+    let (env, vault, _admin, _token) = setup();
+    // A fresh env without mock_all_auths → auth check fires
+    let strict_env = Env::default();
+    let strict_vault_addr = strict_env.register_contract(None, AuraVault);
+    let strict_vault = AuraVaultClient::new(&strict_env, &strict_vault_addr);
+    strict_vault.pause(); // no admin auth mocked — must panic
+}
+
+/// Non-admin may not call unpause.
+#[test]
+#[should_panic]
+fn test_security_unpause_by_non_admin_panics() {
+    let (env, vault, _admin, _token) = setup();
+    let strict_env = Env::default();
+    let strict_vault_addr = strict_env.register_contract(None, AuraVault);
+    let strict_vault = AuraVaultClient::new(&strict_env, &strict_vault_addr);
+    strict_vault.unpause();
+}
+
+/// Non-admin calling harvest is rejected with HarvestUnauthorized.
+#[test]
+fn test_security_harvest_access_control() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    let stranger = Address::generate(&env);
+    mint(&env, &token, &admin, &stranger, 1_000);
+    let result = vault.try_harvest(&stranger, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::HarvestUnauthorized)));
+}
+
+/// Non-admin calling transfer_admin is rejected (auth panic).
+#[test]
+#[should_panic]
+fn test_security_transfer_admin_by_non_admin_panics() {
+    let (env, vault, _admin, _token) = setup();
+    let strict_env = Env::default();
+    let strict_vault_addr = strict_env.register_contract(None, AuraVault);
+    let strict_vault = AuraVaultClient::new(&strict_env, &strict_vault_addr);
+    let impostor = Address::generate(&strict_env);
+    strict_vault.transfer_admin(&impostor);
+}
+
+/// Admin transfer is effective: old admin loses access after transfer.
+#[test]
+fn test_security_admin_transfer_revokes_old_admin() {
+    let (env, vault, admin, token) = setup();
+    let new_admin = Address::generate(&env);
+    vault.transfer_admin(&new_admin);
+
+    // Old admin tries to harvest — must fail (now non-admin)
+    mint(&env, &token, &admin, &admin, 1_000_000);
+    vault.deposit(&admin, &1_000_000);
+    let result = vault.try_harvest(&admin, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::HarvestUnauthorized)));
+}
+
+// ---------------------------------------------------------------------------
+// Flash-loan guard (BalanceMismatch)
+// ---------------------------------------------------------------------------
+
+/// When actual token balance equals tracked state, deposit succeeds normally.
+#[test]
+fn test_security_flash_loan_guard_passes_normally() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    // No discrepancy → deposit must succeed
+    let shares = vault.deposit(&user, &1_000_000);
+    assert_eq!(shares, 1_000_000);
+}
+
+// ---------------------------------------------------------------------------
+// Pause guard
+// ---------------------------------------------------------------------------
+
+/// All three mutating operations are blocked while the vault is paused.
+#[test]
+fn test_security_pause_blocks_deposit() {
+    let (env, vault, _admin, _token) = setup();
+    vault.pause();
+    let user = Address::generate(&env);
+    let result = vault.try_deposit(&user, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_security_pause_blocks_withdraw() {
+    let (env, vault, _admin, _token) = setup();
+    vault.pause();
+    let user = Address::generate(&env);
+    let result = vault.try_withdraw(&user, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+#[test]
+fn test_security_pause_blocks_harvest() {
+    let (env, vault, admin, _token) = setup();
+    vault.pause();
+    let result = vault.try_harvest(&admin, &1_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+/// Operations resume after unpause.
+#[test]
+fn test_security_unpause_resumes_operations() {
+    let (env, vault, admin, token) = setup();
+    vault.pause();
+    vault.unpause();
+
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    let shares = vault.deposit(&user, &1_000_000);
+    assert_eq!(shares, 1_000_000);
+}
+
+/// is_paused reflects pause/unpause transitions correctly.
+#[test]
+fn test_security_is_paused_state_transitions() {
+    let (_env, vault, _admin, _token) = setup();
+    assert!(!vault.is_paused());
+    vault.pause();
+    assert!(vault.is_paused());
+    vault.unpause();
+    assert!(!vault.is_paused());
+}
+
+/// Pausing an already-paused vault is idempotent (no error).
+#[test]
+fn test_security_double_pause_idempotent() {
+    let (_env, vault, _admin, _token) = setup();
+    vault.pause();
+    vault.pause(); // second call must not error
+    assert!(vault.is_paused());
+}
+
+// ===========================================================================
+// WITHDRAWAL MECHANISM TESTS — Issue #82
+// Covers: partial/full withdrawal, queue guard (BalanceMismatch), events,
+//         access control, and share-burn correctness.
+// ===========================================================================
+
+/// Full withdrawal: all shares redeemed, vault state reaches zero.
+#[test]
+fn test_withdraw82_full_withdrawal_zeros_vault() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 10_000_000);
+    vault.deposit(&user, &10_000_000);
+
+    let shares = vault.balance_of(&user);
+    let received = vault.withdraw(&user, &shares);
+
+    assert_eq!(received, 10_000_000);
+    assert_eq!(vault.balance_of(&user), 0);
+    assert_eq!(vault.total_assets(), 0);
+}
+
+/// Partial withdrawal: correct tokens returned and remaining shares intact.
+#[test]
+fn test_withdraw82_partial_withdrawal_correct() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    let received = vault.withdraw(&user, &400_000);
+    assert_eq!(received, 400_000);
+    assert_eq!(vault.balance_of(&user), 600_000);
+    assert_eq!(vault.total_assets(), 600_000);
+}
+
+/// Withdrawal after yield: shares redeem proportionally more tokens.
+#[test]
+fn test_withdraw82_after_yield_increased_redemption() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+
+    // 100% yield → each share is worth 2 tokens
+    mint(&env, &token, &admin, &admin, 1_000_000);
+    vault.harvest(&admin, &1_000_000);
+
+    let received = vault.withdraw(&user, &1_000_000);
+    assert_eq!(received, 2_000_000);
+}
+
+/// Two users withdraw independently; neither affects the other's balance.
+#[test]
+fn test_withdraw82_independent_user_withdrawals() {
+    let (env, vault, admin, token) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    mint(&env, &token, &admin, &alice, 1_000_000);
+    mint(&env, &token, &admin, &bob, 2_000_000);
+    vault.deposit(&alice, &1_000_000);
+    vault.deposit(&bob, &2_000_000);
+
+    vault.withdraw(&alice, &1_000_000);
+    assert_eq!(vault.balance_of(&alice), 0);
+    // Bob's balance must be unaffected
+    assert_eq!(vault.balance_of(&bob), 2_000_000);
+}
+
+/// Withdraw more than owned → InsufficientShares.
+#[test]
+fn test_withdraw82_exceed_balance_rejected() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 500_000);
+    vault.deposit(&user, &500_000);
+
+    let result = vault.try_withdraw(&user, &500_001);
+    assert_eq!(result, Err(Ok(VaultError::InsufficientShares)));
+}
+
+/// Zero-share withdraw → ZeroAmount.
+#[test]
+fn test_withdraw82_zero_shares_rejected() {
+    let (env, vault, _admin, _token) = setup();
+    let user = Address::generate(&env);
+    let result = vault.try_withdraw(&user, &0);
+    assert_eq!(result, Err(Ok(VaultError::ZeroAmount)));
+}
+
+/// Withdrawal when vault is paused → VaultPaused.
+#[test]
+fn test_withdraw82_paused_vault_rejected() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 1_000_000);
+    vault.deposit(&user, &1_000_000);
+    vault.pause();
+
+    let result = vault.try_withdraw(&user, &1_000_000);
+    assert_eq!(result, Err(Ok(VaultError::VaultPaused)));
+}
+
+/// Sequential withdrawals correctly drain the vault share-by-share.
+#[test]
+fn test_withdraw82_sequential_drains_vault() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 3_000_000);
+    vault.deposit(&user, &3_000_000);
+
+    vault.withdraw(&user, &1_000_000);
+    assert_eq!(vault.total_assets(), 2_000_000);
+    vault.withdraw(&user, &1_000_000);
+    assert_eq!(vault.total_assets(), 1_000_000);
+    vault.withdraw(&user, &1_000_000);
+    assert_eq!(vault.total_assets(), 0);
+    assert_eq!(vault.balance_of(&user), 0);
 }

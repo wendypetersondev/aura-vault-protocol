@@ -9,6 +9,7 @@ import {
   getUserSessions,
   revokeAllSessions,
 } from "./auth.js";
+import { webhookRouter } from "./webhook.js";
 
 const app = express();
 app.use(cors());
@@ -83,13 +84,20 @@ app.post("/api/auth/revoke-all", authenticate, (req, res) => {
   res.json({ success: true });
 });
 
+// Webhook management (authenticated)
+app.use("/api/webhooks", authenticate, webhookRouter);
+
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
+  startWorker();
   console.log(`Aura Vault backend running on port ${PORT}`);
 });
 

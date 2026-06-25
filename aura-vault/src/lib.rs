@@ -148,7 +148,12 @@ impl AuraVault {
         let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
         let token = token::Client::new(&env, &token_addr);
 
-        // Flash-loan guard: actual token balance must equal tracked state.
+        // Withdrawal queue guard (flash-loan prevention): the vault's actual
+        // on-chain token balance must equal the internally tracked
+        // `total_deposited` before any withdrawal is processed.  If an
+        // attacker flash-loans tokens into the vault to inflate
+        // `balance_before`, this check fires and the transaction reverts,
+        // preventing share-price manipulation attacks.
         let balance_before = token.balance(&env.current_contract_address());
         let total_deposited = get_total_deposited(&env);
         if balance_before != total_deposited {
@@ -258,6 +263,18 @@ impl AuraVault {
             return Err(VaultError::BalanceMismatch);
         }
 
+        let perf_fee_bps = storage::get_perf_fee_bps(&env);
+        let _mgmt_fee_bps = storage::get_mgmt_fee_bps(&env);
+        let perf_fee = fee::calc_perf_fee(yield_amount, perf_fee_bps)?;
+        let yield_after_fee = yield_amount
+            .checked_sub(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+
+        let current_fees = storage::get_total_fee_collected(&env);
+        let new_fees = current_fees
+            .checked_add(perf_fee)
+            .ok_or(VaultError::MathOverflow)?;
+
         let new_total = total_deposited
             .checked_add(yield_after_fee)
             .ok_or(VaultError::MathOverflow)?;
@@ -267,6 +284,7 @@ impl AuraVault {
 
         // Effect: increase total deposited with yield after fees, record fees
         set_total_deposited(&env, new_total);
+        storage::set_total_fee_collected(&env, new_fees);
 
         env.events().publish(
             (Symbol::new(&env, "harvest"),),
