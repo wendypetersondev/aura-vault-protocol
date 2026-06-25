@@ -15,7 +15,8 @@
     "bcryptjs": "^3.0.2",
     "uuid": "^11.1.0",
     "express-rate-limit": "^7.5.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
+import { pingRedis } from "./redis.js";
 import {
   generateTokens,
   validateAccessToken,
@@ -9,6 +10,9 @@ import {
   getUserSessions,
   revokeAllSessions,
 } from "./auth.js";
+import { cacheMiddleware } from "./middleware/cacheMiddleware.js";
+import { getAssetPrice, getPools, warmCache } from "./services/defi.js";
+import { getCacheStats } from "./cache.js";
 
 const app = express();
 app.use(cors());
@@ -20,14 +24,17 @@ const authLimiter = rateLimit({
   message: { error: "Too many auth requests, try again later" },
 });
 
-// Auth middleware
-function authenticate(req: express.Request, res: express.Response, next: express.NextFunction) {
+async function authenticate(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): Promise<void> {
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) {
     res.status(401).json({ error: "Missing token" });
     return;
   }
-  const payload = validateAccessToken(header.slice(7));
+  const payload = await validateAccessToken(header.slice(7));
   if (!payload) {
     res.status(401).json({ error: "Invalid or expired token" });
     return;
@@ -36,25 +43,25 @@ function authenticate(req: express.Request, res: express.Response, next: express
   next();
 }
 
-// POST /api/auth/login — wallet-based login
-app.post("/api/auth/login", authLimiter, (req, res) => {
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   const { walletAddress, deviceId } = req.body;
   if (!walletAddress) {
     res.status(400).json({ error: "walletAddress required" });
     return;
   }
-  const tokens = generateTokens(walletAddress, deviceId);
+  const tokens = await generateTokens(walletAddress, deviceId);
   res.json(tokens);
 });
 
-// POST /api/auth/refresh
-app.post("/api/auth/refresh", authLimiter, (req, res) => {
+app.post("/api/auth/refresh", authLimiter, async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     res.status(400).json({ error: "refreshToken required" });
     return;
   }
-  const tokens = refreshAccessToken(refreshToken);
+  const tokens = await refreshAccessToken(refreshToken);
   if (!tokens) {
     res.status(401).json({ error: "Invalid or expired refresh token" });
     return;
@@ -62,35 +69,70 @@ app.post("/api/auth/refresh", authLimiter, (req, res) => {
   res.json(tokens);
 });
 
-// POST /api/auth/logout
-app.post("/api/auth/logout", authenticate, (req, res) => {
+app.post("/api/auth/logout", authenticate, async (req, res) => {
   const token = req.headers.authorization!.slice(7);
   const { refreshToken } = req.body;
-  logout(token, refreshToken);
+  await logout(token, refreshToken);
   res.json({ success: true });
 });
 
-// GET /api/auth/sessions
-app.get("/api/auth/sessions", authenticate, (req, res) => {
-  const user = (req as any).user;
-  res.json({ sessions: getUserSessions(user.sub) });
+app.get("/api/auth/sessions", authenticate, async (req, res) => {
+  const sessions = await getUserSessions((req as any).user.sub);
+  res.json({ sessions });
 });
 
-// POST /api/auth/revoke-all
-app.post("/api/auth/revoke-all", authenticate, (req, res) => {
-  const user = (req as any).user;
-  revokeAllSessions(user.sub);
+app.post("/api/auth/revoke-all", authenticate, async (req, res) => {
+  await revokeAllSessions((req as any).user.sub);
   res.json({ success: true });
 });
 
-// Health check
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+// ── DeFi ─────────────────────────────────────────────────────────────────────
+
+const PRICE_TTL = parseInt(process.env.CACHE_DEFI_PRICE_TTL || "30", 10);
+const POOL_TTL = parseInt(process.env.CACHE_DEFI_POOL_TTL || "60", 10);
+
+app.get("/api/defi/price/:asset", cacheMiddleware(PRICE_TTL), async (req, res) => {
+  try {
+    const price = await getAssetPrice(req.params.asset as string);
+    res.json(price);
+  } catch (err: any) {
+    res.status(404).json({ error: err.message });
+  }
 });
+
+app.get("/api/defi/pools", cacheMiddleware(POOL_TTL), async (req, res) => {
+  try {
+    const pools = await getPools();
+    res.json({ pools });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Cache metrics ─────────────────────────────────────────────────────────────
+
+app.get("/api/cache/stats", async (_req, res) => {
+  const stats = await getCacheStats();
+  res.json({ stats });
+});
+
+// ── Health ────────────────────────────────────────────────────────────────────
+
+app.get("/api/health", async (_req, res) => {
+  const redisOk = await pingRedis();
+  res.json({
+    status: "ok",
+    redis: redisOk ? "ok" : "error",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ── Startup ───────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Aura Vault backend running on port ${PORT}`);
+  await warmCache();
 });
 
 export default app;
