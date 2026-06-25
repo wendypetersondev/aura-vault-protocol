@@ -9,15 +9,7 @@ import {
   getUserSessions,
   revokeAllSessions,
 } from "./auth.js";
-import {
-  enqueue,
-  getJob,
-  listJobs,
-  getDeadLetterJobs,
-  queueMetrics,
-  startWorker,
-  type TxJobData,
-} from "./queue.js";
+import { webhookRouter } from "./webhook.js";
 
 const app = express();
 app.use(cors());
@@ -92,54 +84,16 @@ app.post("/api/auth/revoke-all", authenticate, (req, res) => {
   res.json({ success: true });
 });
 
+// Webhook management (authenticated)
+app.use("/api/webhooks", authenticate, webhookRouter);
+
 // Health check
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// ---------------------------------------------------------------------------
-// Transaction Queue — Issue #79
-// ---------------------------------------------------------------------------
-
-const txLimiter = rateLimit({ windowMs: 60_000, max: 200, message: { error: "Rate limit exceeded" } });
-
-// POST /api/tx — enqueue a new transaction job
-app.post("/api/tx", authenticate, txLimiter, (req, res) => {
-  const { type, walletAddress, amount, webhookUrl, meta } = req.body as Partial<TxJobData>;
-  if (!type || !["deposit", "withdrawal", "claim"].includes(type)) {
-    res.status(400).json({ error: "type must be deposit | withdrawal | claim" });
-    return;
-  }
-  if (!walletAddress || !amount) {
-    res.status(400).json({ error: "walletAddress and amount are required" });
-    return;
-  }
-  const job = enqueue({ type, walletAddress, amount, webhookUrl, meta });
-  res.status(202).json({ jobId: job.id, status: job.status });
-});
-
-// GET /api/tx/:id — get job status
-app.get("/api/tx/:id", authenticate, (req, res) => {
-  const job = getJob(req.params["id"]!);
-  if (!job) { res.status(404).json({ error: "job not found" }); return; }
-  res.json(job);
-});
-
-// GET /api/tx — list jobs (optional ?status= filter)
-app.get("/api/tx", authenticate, (req, res) => {
-  const { status } = req.query;
-  res.json({ jobs: listJobs(status as string | undefined) });
-});
-
-// GET /api/tx/dlq — dead-letter queue contents
-app.get("/api/queue/dlq", authenticate, (req, res) => {
-  res.json({ jobs: getDeadLetterJobs() });
-});
-
-// GET /api/queue/metrics — monitoring dashboard data
-app.get("/api/queue/metrics", authenticate, (req, res) => {
-  res.json(queueMetrics());
-});
+// Portfolio
+app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

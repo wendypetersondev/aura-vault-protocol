@@ -2,6 +2,7 @@ import { useState, lazy, Suspense } from "react";
 import { Toast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { OnboardingFlow, hasCompletedOnboarding } from "./components/OnboardingFlow";
+import { Skeleton } from "./components/Skeleton";
 import type { ToastMessage } from "./components/Toast";
 
 const DepositForm = lazy(() => import("./components/DepositForm").then((m) => ({ default: m.DepositForm })));
