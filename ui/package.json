@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:a11y": "vitest run src/tests/a11y"
+    "test:a11y": "vitest run src/tests/a11y",
+    "test:load": "vitest run src/tests/load.test.ts",
+    "test:load:k6": "k6 run src/tests/load.k6.ts"
   },
   "dependencies": {
     "react": "18.3.1",
