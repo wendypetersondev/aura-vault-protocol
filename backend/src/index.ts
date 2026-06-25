@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
 import { pingRedis } from "./redis.js";
 import {
   generateTokens,
@@ -9,8 +8,14 @@ import {
   logout,
   getUserSessions,
   revokeAllSessions,
+  type Tier,
 } from "./auth.js";
 import { cacheMiddleware } from "./middleware/cacheMiddleware.js";
+import {
+  globalIpRateLimiter,
+  authRateLimiter,
+  userRateLimiter,
+} from "./middleware/rateLimitMiddleware.js";
 import { getAssetPrice, getPools, warmCache } from "./services/defi.js";
 import { getCacheStats } from "./cache.js";
 
@@ -18,11 +23,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { error: "Too many auth requests, try again later" },
-});
+// Global IP rate limiter — health check excluded so load-balancer probes are not throttled
+app.use(globalIpRateLimiter(["/api/health"]));
 
 async function authenticate(
   req: express.Request,
@@ -45,17 +47,18 @@ async function authenticate(
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-app.post("/api/auth/login", authLimiter, async (req, res) => {
-  const { walletAddress, deviceId } = req.body;
+app.post("/api/auth/login", authRateLimiter(), async (req, res) => {
+  const { walletAddress, deviceId, tier } = req.body;
   if (!walletAddress) {
     res.status(400).json({ error: "walletAddress required" });
     return;
   }
-  const tokens = await generateTokens(walletAddress, deviceId);
+  const validTier: Tier = tier === "paid" ? "paid" : "free";
+  const tokens = await generateTokens(walletAddress, deviceId, validTier);
   res.json(tokens);
 });
 
-app.post("/api/auth/refresh", authLimiter, async (req, res) => {
+app.post("/api/auth/refresh", authRateLimiter(), async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) {
     res.status(400).json({ error: "refreshToken required" });
@@ -69,19 +72,19 @@ app.post("/api/auth/refresh", authLimiter, async (req, res) => {
   res.json(tokens);
 });
 
-app.post("/api/auth/logout", authenticate, async (req, res) => {
+app.post("/api/auth/logout", authenticate, userRateLimiter(), async (req, res) => {
   const token = req.headers.authorization!.slice(7);
   const { refreshToken } = req.body;
   await logout(token, refreshToken);
   res.json({ success: true });
 });
 
-app.get("/api/auth/sessions", authenticate, async (req, res) => {
+app.get("/api/auth/sessions", authenticate, userRateLimiter(), async (req, res) => {
   const sessions = await getUserSessions((req as any).user.sub);
   res.json({ sessions });
 });
 
-app.post("/api/auth/revoke-all", authenticate, async (req, res) => {
+app.post("/api/auth/revoke-all", authenticate, userRateLimiter(), async (req, res) => {
   await revokeAllSessions((req as any).user.sub);
   res.json({ success: true });
 });

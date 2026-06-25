@@ -14,10 +14,13 @@ const JWT_SECRET = process.env.JWT_SECRET || "aura-vault-dev-secret";
 const ACCESS_TOKEN_TTL = 900; // 15 minutes
 const REFRESH_TOKEN_TTL = 30 * 24 * 60 * 60; // 30 days
 
+export type Tier = "free" | "paid";
+
 export interface TokenPayload {
   sub: string;
   sessionId: string;
   deviceId?: string;
+  tier?: Tier;
 }
 
 export interface TokenPair {
@@ -30,16 +33,18 @@ interface StoredRefresh {
   userId: string;
   sessionId: string;
   deviceId?: string;
+  tier?: Tier;
 }
 
 export async function generateTokens(
   userId: string,
-  deviceId?: string
+  deviceId?: string,
+  tier: Tier = "free"
 ): Promise<TokenPair> {
   const sessionId = uuidv4();
 
   const accessToken = jwt.sign(
-    { sub: userId, sessionId, deviceId } satisfies TokenPayload,
+    { sub: userId, sessionId, deviceId, tier } satisfies TokenPayload,
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_TTL }
   );
@@ -50,7 +55,7 @@ export async function generateTokens(
     { expiresIn: REFRESH_TOKEN_TTL }
   );
 
-  const stored: StoredRefresh = { userId, sessionId, deviceId };
+  const stored: StoredRefresh = { userId, sessionId, deviceId, tier };
   await cacheSet(NS.AUTH_REFRESH, refreshToken, stored, REFRESH_TOKEN_TTL);
   await setAdd(NS.AUTH_SESSIONS, userId, sessionId, REFRESH_TOKEN_TTL);
 
@@ -81,7 +86,7 @@ export async function refreshAccessToken(
   }
   // Rotate: delete old, issue new pair
   await cacheDel(NS.AUTH_REFRESH, refreshToken);
-  return generateTokens(stored.userId, stored.deviceId);
+  return generateTokens(stored.userId, stored.deviceId, stored.tier);
 }
 
 export async function blacklistToken(token: string): Promise<void> {
