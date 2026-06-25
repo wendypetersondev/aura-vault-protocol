@@ -9,7 +9,7 @@ import {
   getUserSessions,
   revokeAllSessions,
 } from "./auth.js";
-import portfolioRouter from "./portfolio.js";
+import { webhookRouter } from "./webhook.js";
 
 const app = express();
 app.use(cors());
@@ -83,6 +83,9 @@ app.post("/api/auth/revoke-all", authenticate, (req, res) => {
   revokeAllSessions(user.sub);
   res.json({ success: true });
 });
+
+// Webhook management (authenticated)
+app.use("/api/webhooks", authenticate, webhookRouter);
 
 // Health check
 app.get("/api/health", (_req, res) => {
