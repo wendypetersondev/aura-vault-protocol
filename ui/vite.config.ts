@@ -1,41 +1,42 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+import { visualizer } from "rollup-plugin-visualizer";
 
-// More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    react(),
+    mode === "analyze" &&
+      visualizer({
+        filename: "dist/stats.html",
+        open: true,
+        gzipSize: true,
+        brotliSize: true,
+      }),
+  ],
+  build: {
+    target: "es2020",
+    minify: "esbuild",
+    cssMinify: true,
+    reportCompressedSize: true,
+    rollupOptions: {
+      treeshake: {
+        moduleSideEffects: false,
+        propertyReadSideEffects: false,
+      },
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+        },
+        chunkFileNames: "assets/[name]-[hash].js",
+        entryFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
+      },
+    },
+  },
   test: {
-    workspace: [{
-      extends: true,
-      test: {
-        environment: "jsdom",
-        globals: true,
-        setupFiles: "./src/tests/setup.ts"
-      }
-    }, {
-      extends: true,
-      plugins: [
-      // The plugin will run tests for the stories defined in your Storybook config
-      // See options at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon#storybooktest
-      storybookTest({
-        configDir: path.join(dirname, '.storybook')
-      })],
-      test: {
-        name: 'storybook',
-        browser: {
-          enabled: true,
-          headless: true,
-          provider: 'playwright',
-          instances: [{
-            browser: 'chromium'
-          }]
-        }
-      }
-    }]
-  }
-});
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "./src/tests/setup.ts",
+  },
+}));
