@@ -1,0 +1,37 @@
+{
+  "name": "aura-vault-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "bundle:analyze": "tsc -b && vite build --mode analyze",
+    "test": "vitest run",
+    "test:a11y": "vitest run src/tests/a11y",
+    "test:load": "vitest run src/tests/load.test.ts",
+    "test:load:k6": "k6 run src/tests/load.k6.ts"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@axe-core/react": "4.10.2",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/user-event": "14.5.2",
+    "@types/react": "18.3.20",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "axe-core": "4.10.2",
+    "jsdom": "25.0.1",
+    "typescript": "5.7.3",
+    "vite": "6.0.7",
+    "vitest": "2.1.8",
+    "jest-axe": "9.0.0",
+    "@types/jest-axe": "3.5.9",
+    "rollup-plugin-visualizer": "5.12.0"
+  }
+}
