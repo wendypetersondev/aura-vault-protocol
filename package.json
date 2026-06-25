@@ -1,0 +1,15 @@
+{
+  "name": "aura-vault-protocol",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "cy:open": "cypress open",
+    "cy:run": "cypress run",
+    "cy:run:chrome": "cypress run --browser chrome",
+    "cy:run:firefox": "cypress run --browser firefox",
+    "cy:run:edge": "cypress run --browser edge"
+  },
+  "devDependencies": {
+    "cypress": "^13.13.0"
+  }
+}
