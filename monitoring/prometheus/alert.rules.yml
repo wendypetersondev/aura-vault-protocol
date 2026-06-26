@@ -76,3 +76,59 @@ groups:
         annotations:
           summary: "Vault balance is low"
           description: "Vault XLM balance is below 100 (current: {{ $value }})."
+
+  - name: aura-vault-operations
+    rules:
+      - alert: VaultPaused
+        expr: vault_is_paused == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault is paused"
+          description: "The Aura Vault has been paused for more than 5 minutes. Deposits, withdrawals, and harvests are blocked."
+
+      - alert: VaultBalanceMismatch
+        expr: increase(vault_balance_mismatch_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault balance mismatch detected (possible flash-loan attack)"
+          description: "The flash-loan guard triggered {{ $value }} time(s) in the last 5 minutes."
+
+      - alert: VaultDepositsStopped
+        expr: rate(vault_deposits_total[15m]) == 0 and vault_total_shares > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No vault deposits in the last 15 minutes"
+          description: "The vault has shares outstanding but no deposits have been recorded recently."
+
+      - alert: VaultSharePriceDrop
+        expr: (vault_total_assets / vault_total_shares) < (vault_total_assets offset 1h / vault_total_shares offset 1h) * 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Vault share price dropped >5% in 1 hour"
+          description: "Share price has fallen significantly. Current: {{ $value }}."
+
+      - alert: VaultHighFeeAccumulation
+        expr: vault_total_fees_collected > 1000000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Vault has accumulated large unclaimed fees"
+          description: "Unclaimed fees: {{ $value }} stroops. Consider withdrawing to treasury."
+
+      - alert: VaultTransactionFailureRate
+        expr: rate(vault_transactions_total{status="failed"}[5m]) / rate(vault_transactions_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High vault transaction failure rate"
+          description: "More than 5% of vault transactions are failing (current: {{ $value | humanizePercentage }})."
