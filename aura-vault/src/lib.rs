@@ -3,23 +3,24 @@
 mod errors;
 mod interface;
 mod storage;
-mod fee;
+mod governance;
 
 pub use errors::VaultError;
 
 #[cfg(test)]
 mod test;
 
-#[cfg(test)]
-mod fuzz;
-
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec, Symbol};
 
 use storage::{
     bump_instance, bump_persistent, get_admin, get_balance, get_layout_version, get_token,
     get_total_deposited, get_total_shares, get_version, is_paused as storage_is_paused, set_admin,
     set_balance, set_layout_version, set_paused, set_token, set_total_deposited, set_total_shares,
     set_version, CURRENT_LAYOUT_VERSION,
+};
+use governance::{
+    initialize_governance, create_proposal, vote_on_proposal, execute_proposal,
+    get_proposal_status, ProposalStatus, ProposalType,
 };
 
 #[contract]
@@ -34,6 +35,7 @@ impl AuraVault {
         env: Env,
         admin: Address,
         underlying_token: Address,
+        signers: Vec<Address>,
     ) -> Result<(), VaultError> {
         if get_admin(&env).is_some() {
             return Err(VaultError::AlreadyInitialized);
@@ -42,8 +44,7 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
-        set_version(&env, 1);
-        set_layout_version(&env, CURRENT_LAYOUT_VERSION);
+        initialize_governance(&env, signers)?;
         bump_instance(&env);
         Ok(())
     }
@@ -415,126 +416,53 @@ impl AuraVault {
     }
 
     // -----------------------------------------------------------------------
-    // transfer_admin — FIX-6: admin is no longer immutable
+    // Governance Methods
     // -----------------------------------------------------------------------
-    /// Transfers admin role to `new_admin`.  Only the current admin may call
-    /// this.  Emits a `admin_transferred` event so monitors can detect a
-    /// privilege hand-off immediately.
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), VaultError> {
-        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
-        admin.require_auth();
 
-        set_admin(&env, &new_admin);
+    pub fn propose_update_admin(env: Env, proposer: Address, new_admin: Address) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateAdmin)
+    }
+
+    pub fn propose_update_token(env: Env, proposer: Address, new_token: Address) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateUnderlyingToken)
+    }
+
+    pub fn propose_parameter_update(
+        env: Env,
+        proposer: Address,
+        name: Symbol,
+        value: i128,
+    ) -> Result<u64, VaultError> {
+        create_proposal(&env, proposer, ProposalType::UpdateParameter { name, value })
+    }
+
+    pub fn vote(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        approve: bool,
+    ) -> Result<(), VaultError> {
+        vote_on_proposal(&env, voter, proposal_id, approve)
+    }
+
+    pub fn execute(
+        env: Env,
+        executor: Address,
+        proposal_id: u64,
+    ) -> Result<(), VaultError> {
+        execute_proposal(&env, executor, proposal_id)?;
         bump_instance(&env);
-
-        env.events().publish(
-            (Symbol::new(&env, "admin_transferred"),),
-            (admin, new_admin),
-        );
-
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // upgrade — UUPS-style: admin-only Wasm replacement
-    // -----------------------------------------------------------------------
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
-        // 1. Must be initialized
-        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
-
-        // 2. Admin-only authorization
-        admin.require_auth();
-
-        // 3. Layout compatibility guard
-        if get_layout_version(&env) != CURRENT_LAYOUT_VERSION {
-            return Err(VaultError::StorageLayoutMismatch);
-        }
-
-        // 4. Effects: bump version before Wasm swap
-        let next_version = get_version(&env)
-            .checked_add(1)
-            .ok_or(VaultError::MathOverflow)?;
-        set_version(&env, next_version);
-        bump_instance(&env);
-
-        // 5. Emit upgrade event BEFORE swap (still in current Wasm execution context)
-        env.events().publish(
-            (Symbol::new(&env, "upgrade"),),
-            (admin, next_version, new_wasm_hash.clone()),
-        );
-
-        // 6. Interaction: atomic Wasm replacement (point of no return)
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
-
-        Ok(())
-    }
-
-    // -----------------------------------------------------------------------
-    // version  (read-only)
-    // -----------------------------------------------------------------------
-    pub fn version(env: Env) -> u32 {
-        get_version(&env)
-    }
-
-    // -----------------------------------------------------------------------
-    // Fee Management Functions
-    // -----------------------------------------------------------------------
-    
-    /// Set performance and management fees (admin only)
-    pub fn set_fees(env: Env, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError> {
-        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
-        admin.require_auth();
-        
-        fee::validate_fees(perf_fee_bps, mgmt_fee_bps)?;
-        
-        storage::set_perf_fee_bps(&env, perf_fee_bps);
-        storage::set_mgmt_fee_bps(&env, mgmt_fee_bps);
-        storage::bump_instance(&env);
-        
-        Ok(())
-    }
-
-    /// Set treasury address (admin only)
-    pub fn set_treasury(env: Env, treasury: Address) -> Result<(), VaultError> {
-        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
-        admin.require_auth();
-        
-        storage::set_treasury(&env, &treasury);
-        storage::bump_instance(&env);
-        
-        Ok(())
-    }
-
-    /// Get current fee settings
-    pub fn get_fees(env: Env) -> (u32, u32) {
-        (storage::get_perf_fee_bps(&env), storage::get_mgmt_fee_bps(&env))
-    }
-
-    /// Get total fees collected
-    pub fn total_fees_collected(env: Env) -> i128 {
-        storage::get_total_fee_collected(&env)
-    }
-
-    /// Withdraw fees to treasury (admin only)
-    pub fn withdraw_fees(env: Env) -> Result<i128, VaultError> {
-        let admin = storage::get_admin(&env).ok_or(VaultError::NotInitialized)?;
-        admin.require_auth();
-        
-        let treasury = storage::get_treasury(&env).ok_or(VaultError::InvalidAddress)?;
-        let fees = storage::get_total_fee_collected(&env);
-        
-        if fees > 0 {
-            let token_addr = storage::get_token(&env).ok_or(VaultError::NotInitialized)?;
-            token::Client::new(&env, &token_addr).transfer(
-                &env.current_contract_address(),
-                &treasury,
-                &fees,
-            );
-            
-            storage::set_total_fee_collected(&env, 0);
-            storage::bump_instance(&env);
-        }
-        
-        Ok(fees)
+    pub fn proposal_status(env: Env, proposal_id: u64) -> Option<String> {
+        get_proposal_status(&env, proposal_id).map(|status| {
+            match status {
+                ProposalStatus::Pending => "Pending".to_string(),
+                ProposalStatus::Approved => "Approved".to_string(),
+                ProposalStatus::Executed => "Executed".to_string(),
+                ProposalStatus::Rejected => "Rejected".to_string(),
+            }
+        })
     }
 }

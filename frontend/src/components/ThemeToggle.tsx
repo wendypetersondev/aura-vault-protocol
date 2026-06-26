@@ -1,9 +1,12 @@
 "use client";
 
 import { Moon, Sun } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useTheme } from "./ThemeProvider";
+import "@/lib/i18n";
 
 export function ThemeToggle() {
+  const { t } = useTranslation();
   const { theme, setTheme } = useTheme();
 
   return (
@@ -15,10 +18,10 @@ export function ThemeToggle() {
             ? "bg-zinc-100 dark:bg-zinc-800"
             : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         }`}
-        aria-label="Light theme"
+        aria-label={t("theme.light")}
       >
         <Sun size={14} />
-        Light
+        {t("theme.light")}
       </button>
       <button
         onClick={() => setTheme("dark")}
@@ -27,10 +30,10 @@ export function ThemeToggle() {
             ? "bg-zinc-100 dark:bg-zinc-800"
             : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         }`}
-        aria-label="Dark theme"
+        aria-label={t("theme.dark")}
       >
         <Moon size={14} />
-        Dark
+        {t("theme.dark")}
       </button>
       <button
         onClick={() => setTheme("system")}
@@ -39,9 +42,9 @@ export function ThemeToggle() {
             ? "bg-zinc-100 dark:bg-zinc-800"
             : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         }`}
-        aria-label="System theme"
+        aria-label={t("theme.auto")}
       >
-        Auto
+        {t("theme.auto")}
       </button>
     </div>
   );
