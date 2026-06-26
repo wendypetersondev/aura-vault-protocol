@@ -82,13 +82,13 @@ export default function TransactionModal({ type, balance, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label={`${label} modal`}
       data-cy="tx-modal"
     >
-      <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-zinc-900">
+      <div className="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-zinc-900 animate-modal-content">
         {/* Close */}
         <button
           data-cy="modal-close"
