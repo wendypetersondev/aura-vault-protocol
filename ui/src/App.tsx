@@ -2,13 +2,15 @@ import { useState, lazy, Suspense } from "react";
 import { Toast } from "./components/Toast";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { OnboardingFlow, hasCompletedOnboarding } from "./components/OnboardingFlow";
+import { Skeleton } from "./components/Skeleton";
 import type { ToastMessage } from "./components/Toast";
 
 const DepositForm = lazy(() => import("./components/DepositForm").then((m) => ({ default: m.DepositForm })));
 const WithdrawForm = lazy(() => import("./components/WithdrawForm").then((m) => ({ default: m.WithdrawForm })));
 const HarvestPanel = lazy(() => import("./components/HarvestPanel").then((m) => ({ default: m.HarvestPanel })));
+const PerformanceCharts = lazy(() => import("./components/PerformanceCharts").then((m) => ({ default: m.PerformanceCharts })));
 
-type Tab = "deposit" | "withdraw" | "harvest";
+type Tab = "deposit" | "withdraw" | "harvest" | "performance";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("deposit");
@@ -33,7 +35,7 @@ export default function App() {
         <main id="main" className="app-main">
           <nav aria-label="Vault actions">
             <div className="tab-list" role="tablist">
-              {(["deposit", "withdraw", "harvest"] as Tab[]).map((t) => (
+              {(["deposit", "withdraw", "harvest", "performance"] as Tab[]).map((t) => (
                 <button
                   key={t}
                   role="tab"
@@ -59,6 +61,7 @@ export default function App() {
               {tab === "deposit" && <DepositForm onToast={notify} />}
               {tab === "withdraw" && <WithdrawForm onToast={notify} />}
               {tab === "harvest" && <HarvestPanel onToast={notify} />}
+              {tab === "performance" && <PerformanceCharts />}
             </Suspense>
           </div>
         </main>

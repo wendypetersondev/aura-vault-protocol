@@ -796,3 +796,146 @@ body {
   color: var(--color-text-muted);
   max-width: 360px;
 }
+
+/* ── PerformanceCharts ─────────────────────────────────────────────────── */
+.perf-charts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-4) 0;
+}
+
+.perf-charts__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+.perf-charts__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.timeframe-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  background: var(--color-surface);
+  border: 1px solid var(--color-surface-raised);
+  border-radius: var(--radius);
+  padding: var(--sp-1);
+}
+
+.timeframe-btn {
+  background: transparent;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: var(--sp-1) var(--sp-3);
+  transition: background var(--transition-fast), color var(--transition-fast);
+  touch-action: manipulation;
+  min-width: 40px;
+}
+
+.timeframe-btn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+}
+
+.timeframe-btn--active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.timeframe-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.export-btn {
+  font-size: 0.8rem;
+  padding: var(--sp-1) var(--sp-3);
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--sp-4);
+}
+
+.chart-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-surface-raised);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4);
+  min-width: 0;
+}
+
+.chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.chart-card__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin: 0 0 var(--sp-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Recharts tooltip */
+.chart-tooltip {
+  background: var(--color-surface-raised);
+  border: 1px solid #ffffff18;
+  border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  pointer-events: none;
+}
+
+.chart-tooltip__label {
+  color: var(--color-text-muted);
+  margin: 0 0 var(--sp-1);
+  font-weight: 600;
+}
+
+/* Secondary button style (for export) */
+.btn--secondary {
+  background: var(--color-surface-raised);
+  border: 1px solid #ffffff18;
+  color: var(--color-text-muted);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 600;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.btn--secondary:hover {
+  background: #2e3350;
+  color: var(--color-text);
+}
+
+.btn--secondary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (max-width: 480px) {
+  .perf-charts__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .timeframe-btn {
+    min-width: 36px;
+    padding: var(--sp-1) var(--sp-2);
+  }
+}
