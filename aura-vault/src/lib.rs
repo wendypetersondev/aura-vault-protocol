@@ -4,6 +4,7 @@ mod errors;
 mod interface;
 mod storage;
 mod governance;
+mod fee;
 
 pub use errors::VaultError;
 
@@ -44,6 +45,8 @@ impl AuraVault {
         set_token(&env, &underlying_token);
         set_total_shares(&env, 0);
         set_total_deposited(&env, 0);
+        set_version(&env, 1);
+        set_layout_version(&env, CURRENT_LAYOUT_VERSION);
         initialize_governance(&env, signers)?;
         bump_instance(&env);
         Ok(())
@@ -51,6 +54,11 @@ impl AuraVault {
 
     // -----------------------------------------------------------------------
     // deposit
+    //
+    // Issue requirement: Emit Deposit event with indexed user and amount.
+    // In Soroban, topics (first tuple) are indexed; data (second value) is not.
+    // We place `caller` and `amount` in topics so they can be efficiently
+    // filtered by indexers.
     // -----------------------------------------------------------------------
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError> {
         caller.require_auth();
@@ -81,7 +89,7 @@ impl AuraVault {
 
         let total_shares = get_total_shares(&env);
 
-        // Compute shares to mint (checked arithmetic, overflow returns MathOverflow)
+        // Compute shares to mint (checked arithmetic; overflow returns MathOverflow)
         let new_shares: i128 = if total_shares == 0 || total_deposited == 0 {
             amount
         } else {
@@ -102,7 +110,9 @@ impl AuraVault {
 
         // Effects: write state after successful transfer
         let old_balance = get_balance(&env, &caller);
-        let new_balance = old_balance + new_shares;
+        let new_balance = old_balance
+            .checked_add(new_shares)
+            .ok_or(VaultError::MathOverflow)?;
         set_balance(&env, &caller, new_balance);
         let new_total_shares = total_shares
             .checked_add(new_shares)
@@ -113,9 +123,11 @@ impl AuraVault {
             .ok_or(VaultError::MathOverflow)?;
         set_total_deposited(&env, new_total_deposited);
 
+        // Event: topics = (event_name, caller, amount) — indexed for efficient filtering.
+        // data = (new_shares, new_total_shares, new_total_deposited) — contextual payload.
         env.events().publish(
-            (Symbol::new(&env, "deposit"),),
-            (caller, amount, new_shares, new_total_shares, new_total_deposited),
+            (Symbol::new(&env, "deposit"), caller.clone(), amount),
+            (new_shares, new_total_shares, new_total_deposited),
         );
 
         bump_persistent(&env, &caller);
@@ -143,12 +155,6 @@ impl AuraVault {
         let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
         let token = token::Client::new(&env, &token_addr);
 
-        // Withdrawal queue guard (flash-loan prevention): the vault's actual
-        // on-chain token balance must equal the internally tracked
-        // `total_deposited` before any withdrawal is processed.  If an
-        // attacker flash-loans tokens into the vault to inflate
-        // `balance_before`, this check fires and the transaction reverts,
-        // preventing share-price manipulation attacks.
         let balance_before = token.balance(&env.current_contract_address());
         let total_deposited = get_total_deposited(&env);
         if balance_before != total_deposited {
@@ -195,9 +201,10 @@ impl AuraVault {
         // Interaction: send tokens to caller after state is settled
         token.transfer(&env.current_contract_address(), &caller, &redeem_amount);
 
+        // Event: topics = (event_name, caller, shares) — indexed for efficient filtering.
         env.events().publish(
-            (Symbol::new(&env, "withdraw"),),
-            (caller, shares, redeem_amount, new_total_shares, new_total_deposited),
+            (Symbol::new(&env, "withdraw"), caller.clone(), shares),
+            (redeem_amount, new_total_shares, new_total_deposited),
         );
 
         bump_persistent(&env, &caller);
@@ -232,7 +239,7 @@ impl AuraVault {
         let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
         let token = token::Client::new(&env, &token_addr);
 
-        // Flash-loan guard: actual token balance must equal tracked state before harvest.
+        // Flash-loan guard
         let balance_before = token.balance(&env.current_contract_address());
         if balance_before != total_deposited {
             env.events().publish(
@@ -243,15 +250,14 @@ impl AuraVault {
         }
 
         let perf_fee_bps = storage::get_perf_fee_bps(&env);
-        let _mgmt_fee_bps = storage::get_mgmt_fee_bps(&env);
-        let perf_fee = fee::calc_perf_fee(yield_amount, perf_fee_bps)?;
+        let fee_amount = fee::calc_perf_fee(yield_amount, perf_fee_bps)?;
         let yield_after_fee = yield_amount
-            .checked_sub(perf_fee)
+            .checked_sub(fee_amount)
             .ok_or(VaultError::MathOverflow)?;
 
         let current_fees = storage::get_total_fee_collected(&env);
         let new_fees = current_fees
-            .checked_add(perf_fee)
+            .checked_add(fee_amount)
             .ok_or(VaultError::MathOverflow)?;
 
         let new_total = total_deposited
@@ -266,8 +272,8 @@ impl AuraVault {
         storage::set_total_fee_collected(&env, new_fees);
 
         env.events().publish(
-            (Symbol::new(&env, "harvest"),),
-            (caller, yield_amount, yield_after_fee, fee_amount),
+            (Symbol::new(&env, "harvest"), caller.clone(), yield_amount),
+            (yield_after_fee, fee_amount, new_total),
         );
 
         bump_instance(&env);
@@ -277,12 +283,6 @@ impl AuraVault {
 
     // -----------------------------------------------------------------------
     // harvest_token — multi-yield-token entry point (Issue #48)
-    //
-    // Accepts any SEP-41 token as yield.  The vault transfers the alt token
-    // from the caller, converts it to underlying at `exchange_rate`
-    // (underlying_units_per_alt_token, 7-decimal fixed-point), and credits
-    // the converted amount to total_deposited.  The admin must have
-    // pre-approved the alt_token address via `register_yield_token`.
     // -----------------------------------------------------------------------
     pub fn harvest_token(
         env: Env,
@@ -327,7 +327,6 @@ impl AuraVault {
             return Err(VaultError::BalanceMismatch);
         }
 
-        // Compute fee on the underlying-equivalent amount
         let perf_fee_bps = storage::get_perf_fee_bps(&env);
         let fee_amount = fee::calc_perf_fee(underlying_amount, perf_fee_bps)
             .unwrap_or(0);
@@ -352,8 +351,8 @@ impl AuraVault {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "harvest_token"),),
-            (caller, alt_token, yield_amount, net_underlying, fee_amount),
+            (Symbol::new(&env, "harvest_token"), caller, alt_token),
+            (yield_amount, net_underlying, fee_amount),
         );
 
         bump_instance(&env);
@@ -378,9 +377,13 @@ impl AuraVault {
 
     // -----------------------------------------------------------------------
     // pause / unpause — admin-only emergency controls
+    // Takes admin address so the client can require_auth on it.
     // -----------------------------------------------------------------------
-    pub fn pause(env: Env) -> Result<(), VaultError> {
-        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+    pub fn pause(env: Env, admin: Address) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
         admin.require_auth();
         set_paused(&env, true);
         env.events().publish((Symbol::new(&env, "paused"),), ());
@@ -388,8 +391,11 @@ impl AuraVault {
         Ok(())
     }
 
-    pub fn unpause(env: Env) -> Result<(), VaultError> {
-        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+    pub fn unpause(env: Env, admin: Address) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
         admin.require_auth();
         set_paused(&env, false);
         env.events().publish((Symbol::new(&env, "unpaused"),), ());
@@ -402,17 +408,109 @@ impl AuraVault {
     }
 
     // -----------------------------------------------------------------------
-    // total_assets  (read-only — no bumps, no writes)
+    // Fee administration — admin-only
+    // -----------------------------------------------------------------------
+
+    /// Set performance and management fee rates (basis points).
+    pub fn set_fees(env: Env, admin: Address, perf_fee_bps: u32, mgmt_fee_bps: u32) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
+        admin.require_auth();
+        storage::set_perf_fee_bps(&env, perf_fee_bps);
+        storage::set_mgmt_fee_bps(&env, mgmt_fee_bps);
+        bump_instance(&env);
+        Ok(())
+    }
+
+    /// Set treasury address where fees are sent on withdrawal.
+    pub fn set_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
+        admin.require_auth();
+        storage::set_treasury(&env, &treasury);
+        bump_instance(&env);
+        Ok(())
+    }
+
+    /// Withdraw accumulated fees to the treasury. Admin-only.
+    pub fn withdraw_fees(env: Env, admin: Address) -> Result<i128, VaultError> {
+        let stored_admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        if stored_admin != admin {
+            return Err(VaultError::UpgradeUnauthorized);
+        }
+        admin.require_auth();
+
+        let fees = storage::get_total_fee_collected(&env);
+        if fees <= 0 {
+            return Ok(0);
+        }
+
+        let treasury = storage::get_treasury(&env).ok_or(VaultError::NotInitialized)?;
+        let token_addr = get_token(&env).ok_or(VaultError::NotInitialized)?;
+        let token = token::Client::new(&env, &token_addr);
+
+        // Adjust total_deposited: fees were already excluded from it during harvest,
+        // so we just transfer from vault balance.
+        token.transfer(&env.current_contract_address(), &treasury, &fees);
+        storage::set_total_fee_collected(&env, 0);
+
+        env.events().publish(
+            (Symbol::new(&env, "fees_withdrawn"), admin),
+            (fees, treasury),
+        );
+
+        bump_instance(&env);
+        Ok(fees)
+    }
+
+    /// Read total accumulated (unwithdrawn) fees.
+    pub fn total_fees_collected(env: Env) -> i128 {
+        storage::get_total_fee_collected(&env)
+    }
+
+    // -----------------------------------------------------------------------
+    // total_assets  (read-only)
     // -----------------------------------------------------------------------
     pub fn total_assets(env: Env) -> i128 {
         get_total_deposited(&env)
     }
 
     // -----------------------------------------------------------------------
-    // balance_of  (read-only — no bumps, no writes)
+    // balance_of  (read-only)
     // -----------------------------------------------------------------------
     pub fn balance_of(env: Env, address: Address) -> i128 {
         get_balance(&env, &address)
+    }
+
+    // -----------------------------------------------------------------------
+    // Upgrade
+    // -----------------------------------------------------------------------
+    pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), VaultError> {
+        let admin = get_admin(&env).ok_or(VaultError::NotInitialized)?;
+        admin.require_auth();
+
+        let current_version = get_layout_version(&env);
+        if current_version != CURRENT_LAYOUT_VERSION {
+            return Err(VaultError::StorageLayoutMismatch);
+        }
+
+        let old_version = get_version(&env);
+        let new_version = old_version + 1;
+        set_version(&env, new_version);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), admin),
+            (old_version, new_version),
+        );
+
+        bump_instance(&env);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -455,13 +553,13 @@ impl AuraVault {
         Ok(())
     }
 
-    pub fn proposal_status(env: Env, proposal_id: u64) -> Option<String> {
+    pub fn proposal_status(env: Env, proposal_id: u64) -> Option<soroban_sdk::String> {
         get_proposal_status(&env, proposal_id).map(|status| {
             match status {
-                ProposalStatus::Pending => "Pending".to_string(),
-                ProposalStatus::Approved => "Approved".to_string(),
-                ProposalStatus::Executed => "Executed".to_string(),
-                ProposalStatus::Rejected => "Rejected".to_string(),
+                ProposalStatus::Pending => soroban_sdk::String::from_str(&env, "Pending"),
+                ProposalStatus::Approved => soroban_sdk::String::from_str(&env, "Approved"),
+                ProposalStatus::Executed => soroban_sdk::String::from_str(&env, "Executed"),
+                ProposalStatus::Rejected => soroban_sdk::String::from_str(&env, "Rejected"),
             }
         })
     }
