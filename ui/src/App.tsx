@@ -12,6 +12,19 @@ const PerformanceCharts = lazy(() => import("./components/PerformanceCharts").th
 
 type Tab = "deposit" | "withdraw" | "harvest" | "performance";
 
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      onClick={toggleTheme}
+      aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      style={{ background:"transparent", border:"none", cursor:"pointer", color:"var(--color-text-muted)", display:"flex", alignItems:"center", padding:"var(--sp-1)" }}
+    >
+      {theme === "dark" ? <IconSun size="md" /> : <IconMoon size="md" />}
+    </button>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>("deposit");
   const [toast, setToast] = useState<ToastMessage | null>(null);
