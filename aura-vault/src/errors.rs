@@ -14,4 +14,7 @@ pub enum VaultError {
     MathOverflow           = 6,
     InvalidAddress         = 7,
     ZeroShares             = 8,
+    TimelockNotExpired     = 9,
+    NotApproved            = 10,
+    AlreadyVoted           = 11,
 }

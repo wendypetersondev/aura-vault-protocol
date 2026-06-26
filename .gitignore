@@ -2,3 +2,6 @@ target/
 Cargo.lock
 .DS_Store
 *.wasm
+
+*storybook.log
+storybook-static

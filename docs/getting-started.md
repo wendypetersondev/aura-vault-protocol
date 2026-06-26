@@ -1,182 +1,128 @@
-# Getting Started — Aura Vault Protocol
+# Getting Started with Aura Vault
 
-Aura is a yield vault on the Stellar network. You deposit tokens, receive vault shares, and your shares automatically appreciate as keepers harvest yield — no manual compounding needed.
-
----
-
-## What You Need Before Starting
-
-- A Stellar wallet (Freighter, Lobstr, or any SEP-7-compatible wallet)
-- The underlying token the vault accepts (e.g. USDC on Stellar)
-- A small amount of XLM for transaction fees (~0.01 XLM per operation)
+Aura Vault is a yield-generating vault on the Stellar network. You deposit tokens, receive vault shares, and your shares automatically grow in value as the vault earns yield — no manual compounding required.
 
 ---
 
-## Step 1 — Connect Your Wallet
+## Prerequisites
 
-1. Open your Stellar wallet application.
-2. Make sure it is set to the correct network (Testnet for testing, Mainnet for real funds).
-3. Confirm you have a non-zero XLM balance for fees.
-4. Copy your Stellar address (starts with `G...`).
-
-If you are using the Stellar CLI instead of a UI, set up your keypair:
-
-```bash
-stellar keys generate my-wallet --network testnet
-stellar keys address my-wallet
-```
+- A Stellar wallet (Freighter recommended)
+- Some XLM for transaction fees (~0.1 XLM per transaction)
+- The underlying token accepted by the vault (check the vault's token address)
 
 ---
 
-## Step 2 — Get the Contract ID
+## Step 1 — Install a Wallet
 
-The vault contract ID is a unique identifier on the Stellar network. It looks like:
+**Freighter** is the most widely supported browser wallet for Stellar.
 
-```
-CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-```
+1. Go to [freighter.app](https://www.freighter.app) and install the browser extension.
+2. Create a new wallet or import an existing one using your 12/24-word seed phrase.
+3. Switch to **Testnet** if you want to try things out risk-free before using real funds.
 
-Get it from the project's official announcement, the deployer, or the on-chain explorer at [stellar.expert](https://stellar.expert).
+> Keep your seed phrase offline and never share it with anyone.
+
+---
+
+## Step 2 — Connect Your Wallet
+
+1. Open the Aura Vault app in your browser.
+2. Click **Connect Wallet** in the top-right corner.
+3. A Freighter popup will appear — click **Connect**.
+4. Your wallet address (starts with `G...`) will appear in the header.
+
+If the button shows "Wrong Network", open Freighter and switch to the correct network (Testnet or Mainnet).
 
 ---
 
 ## Step 3 — Make Your First Deposit
 
-Depositing transfers your tokens into the vault and mints vault shares to your address.
+1. Enter the amount of tokens you want to deposit in the **Deposit** field.
+2. Click **Deposit**.
+3. Freighter will show a transaction preview — review it and click **Approve**.
+4. Wait for the transaction to confirm (usually 5–10 seconds on Stellar).
+5. Your **share balance** will appear below the form once confirmed.
 
-**What you receive:** `vault_shares = floor(amount × total_shares / total_assets)`
+### How shares work
 
-For the very first deposit ever made into the vault, the ratio is 1:1 — you receive shares equal to your deposit amount.
+| Scenario | What you get |
+|---|---|
+| First ever deposit into the vault | Shares equal to your deposit amount (1:1) |
+| Deposit after yield has accrued | Fewer shares than your deposit amount — but each share is worth more |
 
-**Via Stellar CLI:**
-
-```bash
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source my-wallet \
-  --network testnet \
-  -- deposit \
-  --caller <YOUR_ADDRESS> \
-  --amount 1000000
-```
-
-> Amounts are in the token's smallest unit. For a token with 7 decimal places, `1000000` = 0.1 tokens. For USDC with 6 decimals, `1000000` = 1 USDC.
-
-**What happens on-chain:**
-1. The vault checks your input is valid (non-zero, vault is initialized).
-2. It computes your share allocation.
-3. It transfers your tokens from your wallet to the vault.
-4. It records your shares in on-chain storage.
-5. It returns the number of shares minted to you.
+Your share balance multiplied by the current exchange rate equals your redeemable tokens. As the vault earns yield, the exchange rate increases, so your shares are worth more over time.
 
 ---
 
-## Step 4 — Check Your Share Balance
+## Step 4 — Withdraw
 
-Your shares are your claim on the vault. Read them at any time — this is free (no fee).
+1. Enter the number of **shares** you want to redeem in the **Withdraw** field.
+2. Click **Withdraw**.
+3. Approve the transaction in Freighter.
+4. Your underlying tokens (including any accrued yield) will arrive in your wallet.
 
-```bash
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --network testnet \
-  -- balance_of \
-  --address <YOUR_ADDRESS>
+The amount you receive is calculated as:
+
+```
+tokens = floor(shares × total_vault_assets / total_vault_shares)
 ```
 
-To see the total tokens in the vault:
-
-```bash
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --network testnet \
-  -- total_assets
-```
+Due to integer rounding, you may receive 1 token less than the theoretical maximum. This is expected behavior — the dust stays in the vault and benefits all remaining shareholders.
 
 ---
 
-## Step 5 — Understanding Vault Shares
+## Understanding Vault Shares
 
-Vault shares represent a proportional claim on all tokens in the vault, including yield.
+Think of vault shares like ownership units in a fund:
 
-| Scenario | Your shares | Vault total shares | Vault total tokens | Your claim |
-|---|---|---|---|---|
-| After your deposit | 1,000,000 | 1,000,000 | 1,000,000 | 100% |
-| After a second depositor | 1,000,000 | 2,000,000 | 2,000,000 | 50% |
-| After yield harvest | 1,000,000 | 2,000,000 | 2,200,000 | 50% = 1,100,000 tokens |
+- The vault holds a pool of tokens.
+- You own a percentage of that pool, represented by your shares.
+- When the vault earns yield (via `harvest`), the pool grows — but the share count stays the same. So each share is worth more.
+- Depositing adds to the pool and mints you new shares. Withdrawing burns your shares and returns your proportion of the pool.
 
-Key points:
-- Your share *count* does not change when yield is harvested.
-- The *value* of each share increases as yield accumulates.
-- New depositors pay the current (appreciated) share price — they do not dilute existing holders.
+**Example**
 
-**Redemption formula:** `tokens_returned = floor(your_shares × total_assets / total_shares)`
+| Event | Pool (tokens) | Total shares | Share price |
+|---|---|---|---|
+| Initial state | 0 | 0 | — |
+| Alice deposits 1 000 | 1 000 | 1 000 | 1.00 |
+| Yield harvest: +200 | 1 200 | 1 000 | 1.20 |
+| Bob deposits 600 | 1 800 | 1 500 | 1.20 |
+| Alice withdraws 500 shares | 1 200 | 1 000 | 1.20 |
 
----
-
-## Step 6 — Withdraw
-
-Burn your shares to receive the underlying tokens back, including any yield.
-
-```bash
-stellar contract invoke \
-  --id <CONTRACT_ID> \
-  --source my-wallet \
-  --network testnet \
-  -- withdraw \
-  --caller <YOUR_ADDRESS> \
-  --shares 1000000
-```
-
-You can withdraw any portion of your shares — you do not need to withdraw everything at once.
-
-**Rounding note:** Due to integer math, you may receive 1 fewer token unit than the exact formula suggests. This is normal and bounded to at most 1 unit per withdrawal.
+Alice's 500 shares redeem for `500 × 1200/1000 = 600 tokens` — 100 tokens of yield earned.
 
 ---
 
 ## Fee Structure
 
-Aura v1 has no protocol fee. The only cost is the Stellar network transaction fee (~0.00001 XLM base, plus Soroban resource fees). Typical costs per operation:
+| Fee type | Rate | When applied |
+|---|---|---|
+| Performance fee | Set by admin (basis points) | Applied to yield at harvest time |
+| Management fee | Set by admin (basis points) | Applied periodically |
 
-| Operation | Approximate cost |
-|---|---|
-| `deposit` | ~0.01–0.05 XLM |
-| `withdraw` | ~0.01–0.05 XLM |
-| `harvest` | ~0.01–0.05 XLM |
-| `balance_of` / `total_assets` | ~0.001 XLM |
+Fees are collected into the vault treasury and do not affect the share/token ratio for depositors directly — they are deducted from the yield before it is credited to the vault. To check the current fee rates, call `get_fees()` on the contract or view them in the app's settings page.
 
-Actual costs depend on network congestion and Soroban resource pricing at the time of the transaction.
+> 1 basis point = 0.01%. A 200 bps performance fee means 2% of yield goes to the treasury.
 
 ---
 
 ## FAQ
 
-**Q: Can I lose my deposit?**
-The vault is non-custodial — only your wallet key can authorize withdrawals. Your shares are recorded on-chain and cannot be moved without your authorization. Smart contract bugs are always a risk; review the audited code before depositing significant amounts.
+**Q: Is there a minimum deposit?**  
+A: Any amount > 0 is accepted, but very small deposits may round to 0 shares and be rejected. Practically, deposits above 10 tokens work reliably.
 
-**Q: What if I don't interact with the vault for a long time?**
-Your balance entry in Soroban storage has a 30-day TTL that is extended every time you interact. If 30 days pass with no interaction and no one else bumps the entry, it may be archived. You would need to restore it with a dedicated Stellar transaction before withdrawing. Active vaults with regular harvests will keep the instance alive; only your personal balance entry could expire independently.
+**Q: Can I lose my deposit?**  
+A: The vault is non-custodial — only you can withdraw your shares. The primary risks are smart contract bugs and the underlying token losing value. The contract has been audited and includes multiple security guards (see [AUDIT.md](../AUDIT.md)).
 
-**Q: Can the admin take my funds?**
-No. There are no admin-controlled functions that move user funds in v1. The admin address is stored for potential future governance use but has no privileged runtime access to deposits or withdrawals.
+**Q: What happens if the vault is paused?**  
+A: The admin can pause the vault in an emergency. While paused, deposits, withdrawals, and harvests are blocked. Your funds remain safe in the contract — pause does not affect ownership.
 
-**Q: What is a keeper / harvest?**
-Any account can call `harvest(yield_amount)` to inject additional tokens into the vault. This increases the exchange rate for all shareholders without minting new shares. Keepers are economically incentivized through yield-sharing arrangements external to the contract.
+**Q: Why did I receive fewer tokens than I deposited?**  
+A: If you deposited after yield had already accrued, your shares represent a proportional slice of the bigger pool, so fewer shares were minted. When you withdraw those shares at the current (higher) exchange rate you receive the correct value including yield.
 
-**Q: What does "ZeroAmount" error mean?**
-Your deposit was so small relative to the vault's total assets that the share formula rounded down to zero shares. The vault rejects such deposits to protect you — your tokens are never transferred. Try a larger deposit amount.
+**Q: How do I report an issue?**  
+A: Open an issue on the [GitHub repository](https://github.com/soterika/aura-vault-protocol) or contact the team via the community channels listed in the README.
 
-**Q: Is this audited?**
-See `SECURITY.md` for the current security posture. Always check the latest audit status before depositing.
-
----
-
-## Troubleshooting
-
-| Error | Cause | Fix |
-|---|---|---|
-| `NotInitialized` | Vault not set up yet | Contact the deployer |
-| `ZeroAmount` | Deposit too small or zero | Increase deposit amount |
-| `InsufficientShares` | Withdrawing more shares than you hold | Check `balance_of` first |
-| `MathOverflow` | Arithmetic overflow (extremely large amounts) | Use a smaller amount |
-| `ZeroShares` | Harvesting into an empty vault | Wait for a depositor first |
-| Transaction fee error | Insufficient XLM | Top up XLM balance |
+**Q: Is there a video walkthrough?**  
+A: A video walkthrough is in production. Check the repository README for the latest link.

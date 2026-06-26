@@ -1,0 +1,54 @@
+name: Cypress E2E
+
+on:
+  push:
+    branches:
+      - main
+      - feature/cypress-e2e-tests
+  pull_request:
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome, firefox, edge]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install frontend deps and build
+        working-directory: frontend
+        run: |
+          npm ci
+          npx next build
+
+      - name: Start frontend server
+        working-directory: frontend
+        run: npx next start &
+
+      - name: Run Cypress (${{ matrix.browser }})
+        uses: cypress-io/github-action@v6
+        with:
+          browser: ${{ matrix.browser }}
+          wait-on: "http://localhost:3000"
+          wait-on-timeout: 60
+          install: false
+
+      - name: Upload screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cypress-screenshots-${{ matrix.browser }}
+          path: cypress/screenshots
+          if-no-files-found: ignore
