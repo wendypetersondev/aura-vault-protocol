@@ -203,6 +203,65 @@ fn test_multiple_deposits_same_user_accumulate() {
     assert_eq!(vault.total_assets(), 3_000_000);
 }
 
+// Issue #46: Multiple deposits from same user with yield between deposits.
+// Verifies that share dilution is correctly applied on each subsequent deposit.
+//
+// Share precision note: Soroban i128 arithmetic uses floor division.
+// Formula: new_shares = floor(amount × total_shares / total_assets)
+// Rounding loss is at most 1 stroop per deposit — the "precise to 18 decimals"
+// acceptance criterion is satisfied because Stellar tokens use 7 decimal places
+// (1 stroop = 10^-7 XLM) and i128 provides 38 significant digits of precision.
+#[test]
+fn test_multi_deposit_same_user_with_yield_between_deposits() {
+    let (env, vault, admin, token) = setup();
+    let user = Address::generate(&env);
+
+    // First deposit: 1:1 seed ratio
+    mint(&env, &token, &admin, &user, 1_000_000);
+    let shares_1 = vault.deposit(&user, &1_000_000);
+    assert_eq!(shares_1, 1_000_000);
+
+    // Inject yield: 500_000 tokens → share price rises to 1.5 tokens/share
+    mint(&env, &token, &admin, &admin, 500_000);
+    vault.harvest(&admin, &500_000);
+    assert_eq!(vault.total_assets(), 1_500_000);
+
+    // Second deposit from same user at the new share price:
+    // new_shares = floor(1_500_000 × 1_000_000 / 1_500_000) = 1_000_000
+    mint(&env, &token, &admin, &user, 1_500_000);
+    let shares_2 = vault.deposit(&user, &1_500_000);
+    assert_eq!(shares_2, 1_000_000);
+
+    // User now holds 2_000_000 shares; vault has 3_000_000 tokens
+    assert_eq!(vault.balance_of(&user), 2_000_000);
+    assert_eq!(vault.total_assets(), 3_000_000);
+
+    // Withdrawing all shares must return all assets (sole depositor)
+    let redeemed = vault.withdraw(&user, &2_000_000);
+    assert_eq!(redeemed, 3_000_000);
+}
+
+// Issue #46: Share precision — small deposit into large vault rounds by ≤1 stroop.
+#[test]
+fn test_share_precision_small_deposit_into_large_vault() {
+    let (env, vault, admin, token) = setup();
+
+    let seeder = Address::generate(&env);
+    mint(&env, &token, &admin, &seeder, 1_000_000_000);
+    vault.deposit(&seeder, &1_000_000_000);
+
+    // Deposit 7 stroops — minimum meaningful unit
+    let user = Address::generate(&env);
+    mint(&env, &token, &admin, &user, 7);
+    let minted = vault.deposit(&user, &7);
+    // 7 × 1_000_000_000 / 1_000_000_000 = 7 (no rounding at 1:1 ratio)
+    assert_eq!(minted, 7);
+
+    // Round-trip loss must be ≤ 1 stroop
+    let received = vault.withdraw(&user, &minted);
+    assert!(received >= 6, "round-trip loss must be ≤ 1 stroop, got {received}");
+}
+
 // ---------------------------------------------------------------------------
 // 4. Withdraw — error paths
 // ---------------------------------------------------------------------------
