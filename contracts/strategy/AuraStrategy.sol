@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 // ─── Minimal protocol interfaces ──────────────────────────────────────────────
 
@@ -23,10 +24,13 @@ interface ICToken {
  * @title AuraStrategy
  * @notice Deploys vault assets into Aave v2/v3 (primary) or Compound (fallback)
  *         for yield generation. Supports up to N tokens, auto-compound harvest,
- *         emergency withdrawal, and an on-chain health check.
+ *         emergency withdrawal, an on-chain health check, and proportional yield
+ *         distribution to vault shareholders.
  */
-contract AuraStrategy is AccessControl, ReentrancyGuard {
+contract AuraStrategy is AccessControl, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
+
+    uint256 private constant PRECISION = 1e18;
 
     bytes32 public constant STRATEGY_MANAGER_ROLE = keccak256("STRATEGY_MANAGER_ROLE");
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
@@ -48,6 +52,20 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
     bool public emergencyMode;
     uint256 public lastHarvestTimestamp;
 
+    // ─── Yield distribution state ─────────────────────────────────────────────
+
+    /// @notice Total vault shares tracked by this contract.
+    uint256 public totalShares;
+
+    /// @notice Share balance per shareholder.
+    mapping(address => uint256) public shareBalance;
+
+    /// @notice Accumulated yield per share (scaled by PRECISION) per yield token.
+    mapping(address => uint256) public yieldPerShareAccumulator;
+
+    /// @notice Yield already accounted for per (yieldToken => shareholder).
+    mapping(address => mapping(address => uint256)) public yieldDebt;
+
     // ─── Events ───────────────────────────────────────────────────────────────
     event Deposited(address indexed token, uint256 amount, Protocol protocol);
     event Withdrawn(address indexed token, uint256 amount, Protocol protocol);
@@ -55,6 +73,8 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
     event EmergencyWithdrawal(address indexed token, uint256 amount);
     event TokenAdded(address indexed token, Protocol protocol);
     event ProtocolSwitched(address indexed token, Protocol from, Protocol to);
+    event YieldDistributed(address indexed yieldToken, uint256 amount, uint256 totalShares);
+    event YieldClaimed(address indexed shareholder, address indexed yieldToken, uint256 amount);
 
     // ─── Modifiers ────────────────────────────────────────────────────────────
     modifier notEmergency() {
@@ -74,6 +94,18 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
         _grantRole(STRATEGY_MANAGER_ROLE, admin);
         aaveLendingPool = ILendingPool(_aaveLendingPool);
         vault = _vault;
+    }
+
+    // ─── Pause / Unpause ──────────────────────────────────────────────────────
+
+    /// @notice Pause all mutating operations. OPERATOR_ROLE only.
+    function pause() external onlyRole(OPERATOR_ROLE) {
+        _pause();
+    }
+
+    /// @notice Resume all mutating operations. OPERATOR_ROLE only.
+    function unpause() external onlyRole(OPERATOR_ROLE) {
+        _unpause();
     }
 
     // ─── Configuration ────────────────────────────────────────────────────────
@@ -108,6 +140,7 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
     function deposit(address token, uint256 amount)
         external
         nonReentrant
+        whenNotPaused
         notEmergency
         onlyVault
     {
@@ -124,6 +157,7 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
     function withdraw(address token, uint256 amount)
         external
         nonReentrant
+        whenNotPaused
         onlyVault
         returns (uint256 received)
     {
@@ -142,6 +176,7 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
     function harvest()
         external
         nonReentrant
+        whenNotPaused
         notEmergency
         onlyRole(STRATEGY_MANAGER_ROLE)
     {
@@ -219,7 +254,90 @@ contract AuraStrategy is AccessControl, ReentrancyGuard {
         }
     }
 
+    // ─── Yield Distribution ───────────────────────────────────────────────────
+
+    /**
+     * @notice Update share tracking for an account. Called by the vault on
+     *         every deposit/withdraw to keep yield attribution in sync.
+     * @param account          The shareholder whose balance changed.
+     * @param newShares        The account's new share balance.
+     * @param newTotalShares   The new vault-wide total share supply.
+     */
+    function updateShares(address account, uint256 newShares, uint256 newTotalShares)
+        external
+        onlyVault
+    {
+        shareBalance[account] = newShares;
+        totalShares = newTotalShares;
+    }
+
+    /**
+     * @notice Distribute `amount` of `yieldToken` proportionally to all
+     *         current shareholders.
+     * @dev Caller must have already transferred `amount` to this contract.
+     *      Reverts if there are no shares to distribute to.
+     */
+    function distributeYield(address yieldToken, uint256 amount)
+        external
+        nonReentrant
+    {
+        require(totalShares > 0, "No shares");
+        require(amount > 0, "Zero amount");
+
+        IERC20(yieldToken).safeTransferFrom(msg.sender, address(this), amount);
+
+        // Increase accumulator: delta = amount * PRECISION / totalShares
+        yieldPerShareAccumulator[yieldToken] += (amount * PRECISION) / totalShares;
+
+        emit YieldDistributed(yieldToken, amount, totalShares);
+    }
+
+    /**
+     * @notice Claim all accumulated yield for `shareholder` across the
+     *         provided yield tokens.
+     */
+    function claimYield(address shareholder, address[] calldata yieldTokens)
+        external
+        nonReentrant
+    {
+        uint256 shares = shareBalance[shareholder];
+        for (uint256 i; i < yieldTokens.length; ++i) {
+            address yieldToken = yieldTokens[i];
+            uint256 pending = _pending(shareholder, yieldToken, shares);
+            if (pending == 0) continue;
+
+            // Mark debt so the same yield can't be claimed twice
+            yieldDebt[yieldToken][shareholder] = yieldPerShareAccumulator[yieldToken] * shares;
+
+            IERC20(yieldToken).safeTransfer(shareholder, pending);
+            emit YieldClaimed(shareholder, yieldToken, pending);
+        }
+    }
+
+    /**
+     * @notice Returns the unclaimed yield for `shareholder` in `yieldToken`.
+     */
+    function pendingYield(address shareholder, address yieldToken)
+        external
+        view
+        returns (uint256)
+    {
+        return _pending(shareholder, yieldToken, shareBalance[shareholder]);
+    }
+
     // ─── Internal helpers ─────────────────────────────────────────────────────
+
+    function _pending(address shareholder, address yieldToken, uint256 shares)
+        internal
+        view
+        returns (uint256)
+    {
+        if (shares == 0) return 0;
+        uint256 accumulated = yieldPerShareAccumulator[yieldToken] * shares;
+        uint256 debt = yieldDebt[yieldToken][shareholder];
+        if (accumulated <= debt) return 0;
+        return (accumulated - debt) / PRECISION;
+    }
 
     function _deployToProtocol(address token, uint256 amount, TokenConfig storage cfg) internal {
         if (cfg.active == Protocol.AAVE) {
