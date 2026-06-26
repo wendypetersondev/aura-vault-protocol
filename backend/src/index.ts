@@ -11,6 +11,8 @@ import {
   type Tier,
 } from "./auth.js";
 import { webhookRouter } from "./webhook.js";
+import { withdrawalRouter } from "./routes/withdrawalRoutes.js";
+import { startWithdrawalProcessor, stopWithdrawalProcessor } from "./services/withdrawalQueue.js";
 
 const app = express();
 app.use(cors());
@@ -74,18 +76,23 @@ app.get("/api/health", (_req, res) => {
 // Portfolio
 app.use("/api/v1/user/portfolio", authenticate, portfolioRouter);
 
+// Withdrawal queue
+app.use("/api/v1/withdraw", withdrawalRouter);
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   startWorker();
   console.log(`Aura Vault backend running on port ${PORT}`);
   await warmCache();
   startEmailWorker();
+  startWithdrawalProcessor();
 });
 
 // Graceful shutdown
 for (const signal of ["SIGTERM", "SIGINT"]) {
   process.once(signal, () => {
     stopEmailWorker();
+    stopWithdrawalProcessor();
     server.close(() => process.exit(0));
   });
 }
