@@ -6,6 +6,8 @@ module.exports = {
     version: "0.8.20",
     settings: { optimizer: { enabled: true, runs: 200 } },
   },
-  // Solidity source roots (oracle/, strategy/, access/)
-  paths: { sources: "./oracle" },
+  paths: {
+    sources: "./access",
+    tests: "./access",
+  },
 };
