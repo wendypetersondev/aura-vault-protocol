@@ -69,3 +69,14 @@ output "ses_domain_identity" {
   description = "SES domain identity"
   value       = var.domain_name != "" && var.enable_email_forwarding ? aws_ses_domain_identity.main[0].arn : null
 }
+
+output "app_secret_arn" {
+  description = "Application secrets ARN for this environment"
+  value       = aws_secretsmanager_secret.app.arn
+}
+
+output "db_master_secret_arn" {
+  description = "Database master credentials secret ARN"
+  value       = aws_secretsmanager_secret.db_master.arn
+  sensitive   = true
+}
