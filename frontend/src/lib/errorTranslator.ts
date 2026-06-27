@@ -97,7 +97,8 @@ export function translateError(error: unknown): { title: string; message: string
   }
 
   if (error instanceof Error) {
-    const code = (error as any).code as ErrorCode | undefined;
+    const errorWithCode = error as Error & { code?: string };
+    const code = errorWithCode.code as ErrorCode | undefined;
     if (code && code in errorMessages) {
       return errorMessages[code];
     }

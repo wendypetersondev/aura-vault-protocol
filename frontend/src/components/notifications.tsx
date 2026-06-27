@@ -56,7 +56,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Notification[]>([]);
 
   useEffect(() => {
-    setNotifications(loadHistory());
+    const history = loadHistory();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (history.length > 0) {
+      setNotifications(history);
+    }
   }, []);
 
   const toast = useCallback((type: NotificationType, title: string, message?: string) => {
