@@ -158,7 +158,7 @@ export default function WalletConnect() {
               data-cy="wallet-type-badge"
               className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-300"
             >
-              {wallet.walletType?.charAt(0).toUpperCase() + wallet.walletType?.slice(1)}
+              {wallet.walletType && wallet.walletType.charAt(0).toUpperCase() + wallet.walletType.slice(1)}
             </span>
             <span
               data-cy="network-badge"
