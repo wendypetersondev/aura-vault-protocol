@@ -1,37 +1,60 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { ChevronDown } from "lucide-react";
 
 interface WalletState {
   address: string | null;
   network: string | null;
   connected: boolean;
+  walletType: "freighter" | "metamask" | "walletconnect" | "coinbase" | null;
 }
 
-const STORAGE_KEY = "aura_last_wallet";
+type WalletType = "freighter" | "metamask" | "walletconnect" | "coinbase";
+
+const STORAGE_KEY = "aura_wallet_state";
+const LAST_WALLET_KEY = "aura_last_wallet_type";
 
 function truncate(addr: string) {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
+function getInstalledWallets(): WalletType[] {
+  const wallets: WalletType[] = [];
+
+  if (typeof window !== "undefined") {
+    if ((window as any).freighterApi) wallets.push("freighter");
+    if ((window as any).ethereum) wallets.push("metamask");
+    wallets.push("walletconnect");
+    if ((window as any).coinbaseWalletSDK) wallets.push("coinbase");
+  }
+
+  return wallets;
+}
+
 export default function WalletConnect() {
-  const [wallet, setWallet] = useState<WalletState>({ address: null, network: null, connected: false });
+  const [wallet, setWallet] = useState<WalletState>({ address: null, network: null, connected: false, walletType: null });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [installedWallets, setInstalledWallets] = useState<WalletType[]>([]);
 
-  // Restore last session on mount
   useEffect(() => {
-    const saved = sessionStorage.getItem(STORAGE_KEY);
+    setInstalledWallets(getInstalledWallets());
+
+    // Restore last session on mount
+    const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        setWallet(JSON.parse(saved));
+        const state = JSON.parse(saved);
+        setWallet(state);
       } catch {
-        sessionStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STORAGE_KEY);
       }
     }
   }, []);
 
-  const connect = useCallback(async () => {
+  const connectFreighter = useCallback(async () => {
     setError(null);
     setLoading(true);
     try {
@@ -47,29 +70,96 @@ export default function WalletConnect() {
       }
       const address = await api.getPublicKey();
       const network = (await api.getNetwork()) as string;
-      const state: WalletState = { address, network: network.toUpperCase(), connected: true };
+      const state: WalletState = { address, network: network.toUpperCase(), connected: true, walletType: "freighter" };
       setWallet(state);
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(LAST_WALLET_KEY, "freighter");
+      setShowDropdown(false);
     } catch (err: any) {
-      setError(err?.message ?? "Failed to connect wallet");
+      setError(err?.message ?? "Failed to connect to Freighter");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const connectMetaMask = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) {
+        setError("MetaMask not found. Please install the extension.");
+        return;
+      }
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
+      const chainId = await ethereum.request({ method: "eth_chainId" });
+      const networkName = chainId === "0x1" ? "ETHEREUM" : "TESTNET";
+      const state: WalletState = {
+        address: accounts[0],
+        network: networkName,
+        connected: true,
+        walletType: "metamask"
+      };
+      setWallet(state);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(LAST_WALLET_KEY, "metamask");
+      setShowDropdown(false);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to connect to MetaMask");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const connectCoinbase = useCallback(async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      const { CoinbaseWalletSDK } = await import("@coinbase/wallet-sdk");
+      const coinbaseWallet = new CoinbaseWalletSDK({
+        appName: "Aura Vault Protocol",
+        appLogoUrl: "/logo.png",
+      });
+      const provider = coinbaseWallet.makeWeb3Provider();
+      const accounts = await provider.request({ method: "eth_requestAccounts" }) as string[];
+      const state: WalletState = {
+        address: accounts[0],
+        network: "ETHEREUM",
+        connected: true,
+        walletType: "coinbase"
+      };
+      setWallet(state);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(LAST_WALLET_KEY, "coinbase");
+      setShowDropdown(false);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to connect to Coinbase Wallet");
     } finally {
       setLoading(false);
     }
   }, []);
 
   const disconnect = useCallback(() => {
-    const empty: WalletState = { address: null, network: null, connected: false };
+    const empty: WalletState = { address: null, network: null, connected: false, walletType: null };
     setWallet(empty);
-    sessionStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LAST_WALLET_KEY);
     setError(null);
+    setShowDropdown(false);
   }, []);
 
   return (
     <div className="flex flex-col gap-4 w-full">
       {/* Wallet bar */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 relative">
         {wallet.connected ? (
           <>
+            <span
+              data-cy="wallet-type-badge"
+              className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+            >
+              {wallet.walletType?.charAt(0).toUpperCase() + wallet.walletType?.slice(1)}
+            </span>
             <span
               data-cy="network-badge"
               className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
@@ -88,14 +178,63 @@ export default function WalletConnect() {
             </button>
           </>
         ) : (
-          <button
-            data-cy="connect-wallet-btn"
-            onClick={connect}
-            disabled={loading}
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-black"
-          >
-            {loading ? "Connecting…" : "Connect Wallet"}
-          </button>
+          <div className="relative w-full">
+            <button
+              data-cy="connect-wallet-btn"
+              onClick={() => setShowDropdown(!showDropdown)}
+              disabled={loading}
+              className="w-full rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-black flex items-center justify-between"
+            >
+              {loading ? "Connecting…" : "Connect Wallet"}
+              <ChevronDown size={16} className={`transition-transform ${showDropdown ? "rotate-180" : ""}`} />
+            </button>
+
+            {showDropdown && (
+              <div
+                data-cy="wallet-dropdown"
+                className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-lg z-50"
+              >
+                {installedWallets.includes("freighter") && (
+                  <button
+                    data-cy="wallet-option-freighter"
+                    onClick={connectFreighter}
+                    disabled={loading}
+                    className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700 last:border-b-0 text-sm font-medium"
+                  >
+                    🌟 Freighter Wallet
+                  </button>
+                )}
+                {installedWallets.includes("metamask") && (
+                  <button
+                    data-cy="wallet-option-metamask"
+                    onClick={connectMetaMask}
+                    disabled={loading}
+                    className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700 last:border-b-0 text-sm font-medium"
+                  >
+                    🦊 MetaMask
+                  </button>
+                )}
+                {installedWallets.includes("coinbase") && (
+                  <button
+                    data-cy="wallet-option-coinbase"
+                    onClick={connectCoinbase}
+                    disabled={loading}
+                    className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 border-b border-zinc-200 dark:border-zinc-700 last:border-b-0 text-sm font-medium"
+                  >
+                    💎 Coinbase Wallet
+                  </button>
+                )}
+                <button
+                  data-cy="wallet-option-walletconnect"
+                  onClick={() => setError("WalletConnect coming soon")}
+                  disabled={loading}
+                  className="w-full text-left px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 text-sm font-medium"
+                >
+                  📱 WalletConnect (Coming Soon)
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
