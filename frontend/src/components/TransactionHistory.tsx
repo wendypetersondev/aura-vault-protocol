@@ -100,15 +100,15 @@ export default function TransactionHistory() {
   const sortedTransactions = useMemo(() => {
     const sorted = [...filteredTransactions];
     sorted.sort((a, b) => {
-      let aVal: unknown = a[sortKey as keyof Transaction];
-      let bVal: unknown = b[sortKey as keyof Transaction];
+      let aVal = a[sortKey as keyof Transaction] as string | number;
+      let bVal = b[sortKey as keyof Transaction] as string | number;
 
       if (sortKey === "date") {
         aVal = a.date;
         bVal = b.date;
       }
 
-      if (typeof aVal === "string") {
+      if (typeof aVal === "string" && typeof bVal === "string") {
         aVal = aVal.toLowerCase();
         bVal = bVal.toLowerCase();
       }

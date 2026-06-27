@@ -12,6 +12,7 @@ import {
   Tooltip,
   Legend,
   Filler,
+  TooltipItem,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 
@@ -40,10 +41,6 @@ interface PerformanceData {
   yieldBreakdown: { source: string; amount: number }[];
   totalYield: number;
   currentAPY: number;
-}
-
-interface TooltipContext {
-  parsed: { y: number };
 }
 
 function generateMockData(p: TimePeriod): PerformanceData {
@@ -203,8 +200,9 @@ export default function PerformanceCharts() {
         borderWidth: 1,
         displayColors: false,
         callbacks: {
-          label: function (context: TooltipContext) {
-            return context.parsed.y.toFixed(2);
+          label: function (context: TooltipItem<"line">) {
+            const value = context.parsed.y;
+            return value !== null ? value.toFixed(2) : "N/A";
           },
         },
       },

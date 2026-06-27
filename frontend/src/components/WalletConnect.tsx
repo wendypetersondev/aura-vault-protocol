@@ -23,7 +23,7 @@ function getInstalledWallets(): WalletType[] {
   const wallets: WalletType[] = [];
 
   if (typeof window !== "undefined") {
-    const w = window as Record<string, unknown>;
+    const w = window as unknown as Record<string, unknown>;
     if (w.freighterApi) wallets.push("freighter");
     if (w.ethereum) wallets.push("metamask");
     wallets.push("walletconnect");
@@ -60,8 +60,8 @@ export default function WalletConnect() {
     setError(null);
     setLoading(true);
     try {
-      const w = window as Record<string, unknown>;
-      const api = w.freighterApi as Record<string, (arg: unknown) => Promise<unknown>> | undefined;
+      const w = window as unknown as Record<string, unknown>;
+      const api = w.freighterApi as Record<string, (...args: unknown[]) => Promise<unknown>> | undefined;
       if (!api) {
         setError("Freighter wallet not found. Please install the extension.");
         return;
@@ -71,7 +71,7 @@ export default function WalletConnect() {
         setError("Freighter is not connected. Please unlock your wallet.");
         return;
       }
-      const address = await api.getPublicKey();
+      const address = (await api.getPublicKey()) as string;
       const network = (await api.getNetwork()) as string;
       const state: WalletState = { address, network: network.toUpperCase(), connected: true, walletType: "freighter" };
       setWallet(state);
@@ -89,8 +89,8 @@ export default function WalletConnect() {
     setError(null);
     setLoading(true);
     try {
-      const w = window as Record<string, unknown>;
-      const ethereum = w.ethereum as Record<string, (arg: unknown) => Promise<unknown>> | undefined;
+      const w = window as unknown as Record<string, unknown>;
+      const ethereum = w.ethereum as Record<string, (...args: unknown[]) => Promise<unknown>> | undefined;
       if (!ethereum) {
         setError("MetaMask not found. Please install the extension.");
         return;
