@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ChevronLeft, ChevronRight, Download, ExternalLink, Filter } from "lucide-react";
 
 interface Transaction {
@@ -32,27 +32,6 @@ export default function TransactionHistory() {
   const [searchHash, setSearchHash] = useState("");
   const [showFilters, setShowFilters] = useState(false);
 
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
-
-  async function fetchTransactions() {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/vault/transactions?limit=10000");
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions || []);
-      } else {
-        generateMockTransactions();
-      }
-    } catch {
-      generateMockTransactions();
-    } finally {
-      setLoading(false);
-    }
-  }
-
   function generateMockTransactions() {
     const types: Transaction["type"][] = ["deposit", "withdraw", "swap"];
     const statuses: Transaction["status"][] = ["pending", "success", "failed"];
@@ -71,6 +50,29 @@ export default function TransactionHistory() {
 
     setTransactions(txs);
   }
+
+  const fetchTransactions = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/vault/transactions?limit=10000");
+      if (res.ok) {
+        const data = await res.json();
+        setTransactions(data.transactions || []);
+      } else {
+        generateMockTransactions();
+      }
+    } catch {
+      generateMockTransactions();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchTransactions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
@@ -98,8 +100,8 @@ export default function TransactionHistory() {
   const sortedTransactions = useMemo(() => {
     const sorted = [...filteredTransactions];
     sorted.sort((a, b) => {
-      let aVal: any = a[sortKey];
-      let bVal: any = b[sortKey];
+      let aVal: unknown = a[sortKey as keyof Transaction];
+      let bVal: unknown = b[sortKey as keyof Transaction];
 
       if (sortKey === "date") {
         aVal = a.date;
@@ -218,8 +220,8 @@ export default function TransactionHistory() {
             <select
               data-cy="filter-type"
               value={filterType}
-              onChange={(e) => {
-                setFilterType(e.target.value as any);
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                setFilterType(e.target.value as "all" | Transaction["type"]);
                 setPage(1);
               }}
               className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
@@ -238,8 +240,8 @@ export default function TransactionHistory() {
             <select
               data-cy="filter-status"
               value={filterStatus}
-              onChange={(e) => {
-                setFilterStatus(e.target.value as any);
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                setFilterStatus(e.target.value as "all" | Transaction["status"]);
                 setPage(1);
               }}
               className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"

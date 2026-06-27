@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Download, TrendingUp } from "lucide-react";
 import {
   Chart as ChartJS,
@@ -42,6 +42,46 @@ interface PerformanceData {
   currentAPY: number;
 }
 
+interface TooltipContext {
+  parsed: { y: number };
+}
+
+function generateMockData(p: TimePeriod): PerformanceData {
+  const now = Date.now();
+  const days = {
+    "1D": 1,
+    "1W": 7,
+    "1M": 30,
+    "3M": 90,
+    "1Y": 365,
+    All: 730,
+  }[p];
+
+  const points: ChartDataPoint[] = [];
+  let balance = 1000;
+
+  for (let i = 0; i <= days; i++) {
+    balance += balance * (0.001 + Math.random() * 0.001);
+    points.push({
+      timestamp: now - (days - i) * 86400000,
+      balance: parseFloat(balance.toFixed(2)),
+      apy: 8 + Math.random() * 4,
+      yieldEarned: balance - 1000,
+    });
+  }
+
+  return {
+    balanceHistory: points,
+    yieldBreakdown: [
+      { source: "Trading Fees", amount: (balance - 1000) * 0.6 },
+      { source: "Yield Farming", amount: (balance - 1000) * 0.3 },
+      { source: "Governance", amount: (balance - 1000) * 0.1 },
+    ],
+    totalYield: balance - 1000,
+    currentAPY: 10.5,
+  };
+}
+
 export default function PerformanceCharts() {
   const [period, setPeriod] = useState<TimePeriod>("1M");
   const [data, setData] = useState<PerformanceData | null>(null);
@@ -53,11 +93,7 @@ export default function PerformanceCharts() {
 
   const timePeriods: TimePeriod[] = ["1D", "1W", "1M", "3M", "1Y", "All"];
 
-  useEffect(() => {
-    fetchPerformanceData(period);
-  }, [period]);
-
-  async function fetchPerformanceData(p: TimePeriod) {
+  const fetchPerformanceData = useCallback(async (p: TimePeriod) => {
     setLoading(true);
     try {
       const res = await fetch(
@@ -67,50 +103,19 @@ export default function PerformanceCharts() {
         const result = await res.json();
         setData(result);
       } else {
-        generateMockData(p);
+        setData(generateMockData(p));
       }
     } catch {
-      generateMockData(p);
+      setData(generateMockData(p));
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  function generateMockData(p: TimePeriod) {
-    const now = Date.now();
-    const days = {
-      "1D": 1,
-      "1W": 7,
-      "1M": 30,
-      "3M": 90,
-      "1Y": 365,
-      All: 730,
-    }[p];
-
-    const points: ChartDataPoint[] = [];
-    let balance = 1000;
-
-    for (let i = 0; i <= days; i++) {
-      balance += balance * (0.001 + Math.random() * 0.001);
-      points.push({
-        timestamp: now - (days - i) * 86400000,
-        balance: parseFloat(balance.toFixed(2)),
-        apy: 8 + Math.random() * 4,
-        yieldEarned: balance - 1000,
-      });
-    }
-
-    setData({
-      balanceHistory: points,
-      yieldBreakdown: [
-        { source: "Trading Fees", amount: (balance - 1000) * 0.6 },
-        { source: "Yield Farming", amount: (balance - 1000) * 0.3 },
-        { source: "Governance", amount: (balance - 1000) * 0.1 },
-      ],
-      totalYield: balance - 1000,
-      currentAPY: 10.5,
-    });
-  }
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchPerformanceData(period);
+  }, [period, fetchPerformanceData]);
 
   function downloadCSV() {
     if (!data) return;
@@ -182,25 +187,6 @@ export default function PerformanceCharts() {
     ],
   };
 
-  const yieldChartData = {
-    labels: data.balanceHistory.map((p) =>
-      new Date(p.timestamp).toLocaleDateString()
-    ),
-    datasets: [
-      {
-        label: "Yield Earned",
-        data: data.balanceHistory.map((p) => p.yieldEarned),
-        borderColor: "rgb(168, 85, 247)",
-        backgroundColor: "rgba(168, 85, 247, 0.1)",
-        borderWidth: 2,
-        fill: true,
-        pointRadius: 0,
-        pointHoverRadius: 6,
-        tension: 0.4,
-      },
-    ],
-  };
-
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
@@ -217,7 +203,7 @@ export default function PerformanceCharts() {
         borderWidth: 1,
         displayColors: false,
         callbacks: {
-          label: function (context: any) {
+          label: function (context: TooltipContext) {
             return context.parsed.y.toFixed(2);
           },
         },

@@ -132,8 +132,8 @@ export default function TransactionModal({ type, balance, onClose }: Props) {
       setTxHash(data.hash || `tx-${Date.now()}`);
       setStatus("success");
       setRetryCount(0);
-    } catch (err: any) {
-      const errorMsg = err?.message ?? "Transaction failed";
+    } catch (err: unknown) {
+      const errorMsg = (err instanceof Error ? err.message : "Transaction failed") ?? "Transaction failed";
       setTxError(errorMsg);
       setStatus("error");
 

@@ -23,10 +23,11 @@ function getInstalledWallets(): WalletType[] {
   const wallets: WalletType[] = [];
 
   if (typeof window !== "undefined") {
-    if ((window as any).freighterApi) wallets.push("freighter");
-    if ((window as any).ethereum) wallets.push("metamask");
+    const w = window as Record<string, unknown>;
+    if (w.freighterApi) wallets.push("freighter");
+    if (w.ethereum) wallets.push("metamask");
     wallets.push("walletconnect");
-    if ((window as any).coinbaseWalletSDK) wallets.push("coinbase");
+    if (w.coinbaseWalletSDK) wallets.push("coinbase");
   }
 
   return wallets;
@@ -40,6 +41,7 @@ export default function WalletConnect() {
   const [installedWallets, setInstalledWallets] = useState<WalletType[]>([]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInstalledWallets(getInstalledWallets());
 
     // Restore last session on mount
@@ -58,7 +60,8 @@ export default function WalletConnect() {
     setError(null);
     setLoading(true);
     try {
-      const api = (window as any).freighterApi;
+      const w = window as Record<string, unknown>;
+      const api = w.freighterApi as Record<string, (arg: unknown) => Promise<unknown>> | undefined;
       if (!api) {
         setError("Freighter wallet not found. Please install the extension.");
         return;
@@ -75,8 +78,8 @@ export default function WalletConnect() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       localStorage.setItem(LAST_WALLET_KEY, "freighter");
       setShowDropdown(false);
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to connect to Freighter");
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : "Failed to connect to Freighter") ?? "Failed to connect to Freighter");
     } finally {
       setLoading(false);
     }
@@ -86,13 +89,14 @@ export default function WalletConnect() {
     setError(null);
     setLoading(true);
     try {
-      const ethereum = (window as any).ethereum;
+      const w = window as Record<string, unknown>;
+      const ethereum = w.ethereum as Record<string, (arg: unknown) => Promise<unknown>> | undefined;
       if (!ethereum) {
         setError("MetaMask not found. Please install the extension.");
         return;
       }
-      const accounts = await ethereum.request({ method: "eth_requestAccounts" });
-      const chainId = await ethereum.request({ method: "eth_chainId" });
+      const accounts = await ethereum.request({ method: "eth_requestAccounts" }) as string[];
+      const chainId = await ethereum.request({ method: "eth_chainId" }) as string;
       const networkName = chainId === "0x1" ? "ETHEREUM" : "TESTNET";
       const state: WalletState = {
         address: accounts[0],
@@ -104,8 +108,8 @@ export default function WalletConnect() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       localStorage.setItem(LAST_WALLET_KEY, "metamask");
       setShowDropdown(false);
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to connect to MetaMask");
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : "Failed to connect to MetaMask") ?? "Failed to connect to MetaMask");
     } finally {
       setLoading(false);
     }
@@ -132,8 +136,8 @@ export default function WalletConnect() {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       localStorage.setItem(LAST_WALLET_KEY, "coinbase");
       setShowDropdown(false);
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to connect to Coinbase Wallet");
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : "Failed to connect to Coinbase Wallet") ?? "Failed to connect to Coinbase Wallet");
     } finally {
       setLoading(false);
     }
@@ -277,7 +281,8 @@ function PortfolioSection({ address }: { address: string }) {
     }
   }, [address]);
 
-  useEffect(() => { load(); }, [load]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { void load(); }, [load]);
 
   return (
     <section data-cy="portfolio-section" className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
