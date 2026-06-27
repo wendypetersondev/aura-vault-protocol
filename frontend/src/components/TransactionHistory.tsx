@@ -1,464 +1,320 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { ChevronLeft, ChevronRight, Download, ExternalLink, Filter } from "lucide-react";
+import { useState, useMemo, useCallback } from "react";
 
-interface Transaction {
-  id: string;
+// ── Types ────────────────────────────────────────────────────────────────────
+
+export type TxType = "deposit" | "withdraw" | "harvest" | "all";
+export type TxStatus = "confirmed" | "pending" | "failed" | "all";
+
+export interface Transaction {
   hash: string;
-  date: number;
-  type: "deposit" | "withdraw" | "swap";
-  amount: number;
-  status: "pending" | "success" | "failed";
+  date: string; // ISO-8601
+  type: Exclude<TxType, "all">;
+  amount: string; // decimal string
+  status: Exclude<TxStatus, "all">;
 }
 
-type SortKey = "date" | "amount" | "status" | "type";
-type SortOrder = "asc" | "desc";
-type ItemsPerPage = 25 | 50 | 100;
+export interface TransactionHistoryProps {
+  transactions: Transaction[];
+  explorerBase?: string; // e.g. "https://stellar.expert/explorer/testnet/tx"
+}
 
-export default function TransactionHistory() {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState<ItemsPerPage>(25);
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+// ── Constants ─────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
+
+type SortField = "date" | "amount" | "status";
+type SortDir = "asc" | "desc";
+
+const STATUS_BADGE: Record<Exclude<TxStatus, "all">, string> = {
+  confirmed: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  pending:   "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+  failed:    "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+};
+
+const TYPE_BADGE: Record<Exclude<TxType, "all">, string> = {
+  deposit:  "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
+  withdraw: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+  harvest:  "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function shortHash(hash: string) {
+  return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-6)}` : hash;
+}
+
+function parseAmount(s: string): number {
+  return parseFloat(s) || 0;
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export default function TransactionHistory({
+  transactions,
+  explorerBase = "https://stellar.expert/explorer/testnet/tx",
+}: TransactionHistoryProps) {
   // Filters
-  const [filterType, setFilterType] = useState<"all" | Transaction["type"]>("all");
-  const [filterStatus, setFilterStatus] = useState<"all" | Transaction["status"]>("all");
-  const [filterDateFrom, setFilterDateFrom] = useState<string>("");
-  const [filterDateTo, setFilterDateTo] = useState<string>("");
-  const [searchHash, setSearchHash] = useState("");
-  const [showFilters, setShowFilters] = useState(false);
+  const [typeFilter, setTypeFilter] = useState<TxType>("all");
+  const [statusFilter, setStatusFilter] = useState<TxStatus>("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [search, setSearch] = useState("");
 
-  function generateMockTransactions() {
-    const types: Transaction["type"][] = ["deposit", "withdraw", "swap"];
-    const statuses: Transaction["status"][] = ["pending", "success", "failed"];
-    const txs: Transaction[] = [];
+  // Sorting
+  const [sortField, setSortField] = useState<SortField>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-    for (let i = 0; i < 500; i++) {
-      txs.push({
-        id: `tx-${i}`,
-        hash: `0x${Math.random().toString(16).slice(2)}`,
-        date: Date.now() - Math.random() * 90 * 24 * 60 * 60 * 1000,
-        type: types[Math.floor(Math.random() * types.length)],
-        amount: Math.random() * 10000,
-        status: statuses[Math.floor(Math.random() * statuses.length)],
-      });
-    }
+  // Pagination
+  const [pageSize, setPageSize] = useState<PageSizeOption>(25);
+  const [page, setPage] = useState(1);
 
-    setTransactions(txs);
-  }
-
-  const fetchTransactions = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/vault/transactions?limit=10000");
-      if (res.ok) {
-        const data = await res.json();
-        setTransactions(data.transactions || []);
-      } else {
-        generateMockTransactions();
-      }
-    } catch {
-      generateMockTransactions();
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchTransactions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const filteredTransactions = useMemo(() => {
+  // ── Filtering ───────────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
     return transactions.filter((tx) => {
-      if (filterType !== "all" && tx.type !== filterType) return false;
-      if (filterStatus !== "all" && tx.status !== filterStatus) return false;
-
-      if (filterDateFrom) {
-        const from = new Date(filterDateFrom).getTime();
-        if (tx.date < from) return false;
-      }
-
-      if (filterDateTo) {
-        const to = new Date(filterDateTo).getTime();
-        if (tx.date > to) return false;
-      }
-
-      if (searchHash && !tx.hash.includes(searchHash.toLowerCase())) {
-        return false;
-      }
-
+      if (typeFilter !== "all" && tx.type !== typeFilter) return false;
+      if (statusFilter !== "all" && tx.status !== statusFilter) return false;
+      if (dateFrom && tx.date < dateFrom) return false;
+      if (dateTo && tx.date > dateTo + "T23:59:59Z") return false;
+      if (query && !tx.hash.toLowerCase().includes(query)) return false;
       return true;
     });
-  }, [transactions, filterType, filterStatus, filterDateFrom, filterDateTo, searchHash]);
+  }, [transactions, typeFilter, statusFilter, dateFrom, dateTo, search]);
 
-  const sortedTransactions = useMemo(() => {
-    const sorted = [...filteredTransactions];
-    sorted.sort((a, b) => {
-      let aVal = a[sortKey as keyof Transaction] as string | number;
-      let bVal = b[sortKey as keyof Transaction] as string | number;
-
-      if (sortKey === "date") {
-        aVal = a.date;
-        bVal = b.date;
-      }
-
-      if (typeof aVal === "string" && typeof bVal === "string") {
-        aVal = aVal.toLowerCase();
-        bVal = bVal.toLowerCase();
-      }
-
-      if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
-      return 0;
+  // ── Sorting ─────────────────────────────────────────────────────────────
+  const sorted = useMemo(() => {
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortField === "date")   cmp = a.date.localeCompare(b.date);
+      if (sortField === "amount") cmp = parseAmount(a.amount) - parseAmount(b.amount);
+      if (sortField === "status") cmp = a.status.localeCompare(b.status);
+      return sortDir === "asc" ? cmp : -cmp;
     });
+  }, [filtered, sortField, sortDir]);
 
-    return sorted;
-  }, [filteredTransactions, sortKey, sortOrder]);
+  // ── Pagination ──────────────────────────────────────────────────────────
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageRows = sorted.slice((safePage - 1) * pageSize, safePage * pageSize);
 
-  const paginatedTransactions = useMemo(() => {
-    const start = (page - 1) * itemsPerPage;
-    return sortedTransactions.slice(start, start + itemsPerPage);
-  }, [sortedTransactions, page, itemsPerPage]);
+  const resetPage = useCallback(() => setPage(1), []);
 
-  const totalPages = Math.ceil(sortedTransactions.length / itemsPerPage);
-
-  function handleSort(key: SortKey) {
-    if (sortKey === key) {
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+  function toggleSort(field: SortField) {
+    if (sortField === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     } else {
-      setSortKey(key);
-      setSortOrder("desc");
+      setSortField(field);
+      setSortDir("desc");
     }
+    resetPage();
   }
 
-  function exportCSV() {
-    const headers = ["Date", "Type", "Amount", "Status", "Hash"];
-    const rows = sortedTransactions.map((tx) => [
-      new Date(tx.date).toISOString(),
-      tx.type,
-      tx.amount.toFixed(2),
-      tx.status,
-      tx.hash,
-    ]);
-
-    const csv = [headers, ...rows].map((row) => row.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
+  // ── Export ──────────────────────────────────────────────────────────────
+  function exportCsv() {
+    const header = "date,type,amount,status,hash";
+    const rows = sorted.map(
+      (tx) => `${tx.date},${tx.type},${tx.amount},${tx.status},${tx.hash}`
+    );
+    const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `transactions-${Date.now()}.csv`;
+    a.download = "transactions.csv";
     a.click();
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
   }
 
-  function clearFilters() {
-    setFilterType("all");
-    setFilterStatus("all");
-    setFilterDateFrom("");
-    setFilterDateTo("");
-    setSearchHash("");
-    setPage(1);
+  // ── Column header helper ─────────────────────────────────────────────────
+  function ColHeader({ field, label }: { field: SortField; label: string }) {
+    const active = sortField === field;
+    const arrow = active ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+    return (
+      <th
+        scope="col"
+        className="cursor-pointer select-none whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+        onClick={() => toggleSort(field)}
+        onKeyDown={(e) => e.key === "Enter" && toggleSort(field)}
+        tabIndex={0}
+        aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+      >
+        {label}
+        {arrow}
+      </th>
+    );
   }
-
-  const hasActiveFilters =
-    filterType !== "all" ||
-    filterStatus !== "all" ||
-    filterDateFrom ||
-    filterDateTo ||
-    searchHash;
 
   return (
-    <div
-      data-cy="transaction-history"
-      className="rounded-xl border border-zinc-200 p-6 dark:border-zinc-700"
+    <section
+      aria-label="Transaction History"
+      className="flex flex-col gap-4 rounded-2xl bg-white p-4 shadow-sm dark:bg-zinc-900"
     >
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
-          Transaction History
-        </h2>
-        <div className="flex items-center gap-2">
-          <button
-            data-cy="toggle-filters-btn"
-            onClick={() => setShowFilters(!showFilters)}
-            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-              showFilters || hasActiveFilters
-                ? "bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-900/20 dark:border-blue-700 dark:text-blue-400"
-                : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-            }`}
+      {/* ── Filters ──────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-end gap-3">
+        {/* Search */}
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tx-search" className="text-xs text-zinc-500 dark:text-zinc-400">
+            Search hash
+          </label>
+          <input
+            id="tx-search"
+            type="search"
+            placeholder="0xabc…"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); resetPage(); }}
+            className="h-9 w-52 rounded-lg border border-zinc-200 px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-zinc-400"
+          />
+        </div>
+
+        {/* Type filter */}
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tx-type" className="text-xs text-zinc-500 dark:text-zinc-400">
+            Type
+          </label>
+          <select
+            id="tx-type"
+            value={typeFilter}
+            onChange={(e) => { setTypeFilter(e.target.value as TxType); resetPage(); }}
+            className="h-9 rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           >
-            <Filter size={16} />
-            Filters
+            <option value="all">All</option>
+            <option value="deposit">Deposit</option>
+            <option value="withdraw">Withdraw</option>
+            <option value="harvest">Harvest</option>
+          </select>
+        </div>
+
+        {/* Status filter */}
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tx-status" className="text-xs text-zinc-500 dark:text-zinc-400">
+            Status
+          </label>
+          <select
+            id="tx-status"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value as TxStatus); resetPage(); }}
+            className="h-9 rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            <option value="all">All</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+
+        {/* Date range */}
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tx-date-from" className="text-xs text-zinc-500 dark:text-zinc-400">
+            From
+          </label>
+          <input
+            id="tx-date-from"
+            type="date"
+            value={dateFrom}
+            onChange={(e) => { setDateFrom(e.target.value); resetPage(); }}
+            className="h-9 rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label htmlFor="tx-date-to" className="text-xs text-zinc-500 dark:text-zinc-400">
+            To
+          </label>
+          <input
+            id="tx-date-to"
+            type="date"
+            value={dateTo}
+            onChange={(e) => { setDateTo(e.target.value); resetPage(); }}
+            className="h-9 rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          />
+        </div>
+
+        {/* Clear */}
+        {(search || typeFilter !== "all" || statusFilter !== "all" || dateFrom || dateTo) && (
+          <button
+            onClick={() => {
+              setSearch(""); setTypeFilter("all"); setStatusFilter("all");
+              setDateFrom(""); setDateTo(""); resetPage();
+            }}
+            className="h-9 rounded-lg border border-zinc-200 px-3 text-sm text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            Clear
           </button>
+        )}
+
+        {/* Export — pushed to far right */}
+        <div className="ml-auto">
           <button
-            data-cy="export-csv-btn"
-            onClick={exportCSV}
-            className="flex items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+            onClick={exportCsv}
+            className="h-9 rounded-lg bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-black dark:hover:bg-zinc-300"
           >
-            <Download size={16} />
-            Export
+            Export CSV
           </button>
         </div>
       </div>
 
-      {/* Filters */}
-      {showFilters && (
-        <div
-          data-cy="filter-panel"
-          className="mb-6 grid grid-cols-2 gap-4 rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50 md:grid-cols-3 lg:grid-cols-5"
-        >
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Type
-            </label>
-            <select
-              data-cy="filter-type"
-              value={filterType}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                setFilterType(e.target.value as "all" | Transaction["type"]);
-                setPage(1);
-              }}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-            >
-              <option value="all">All</option>
-              <option value="deposit">Deposit</option>
-              <option value="withdraw">Withdraw</option>
-              <option value="swap">Swap</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Status
-            </label>
-            <select
-              data-cy="filter-status"
-              value={filterStatus}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                setFilterStatus(e.target.value as "all" | Transaction["status"]);
-                setPage(1);
-              }}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-            >
-              <option value="all">All</option>
-              <option value="pending">Pending</option>
-              <option value="success">Success</option>
-              <option value="failed">Failed</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              From Date
-            </label>
-            <input
-              data-cy="filter-date-from"
-              type="date"
-              value={filterDateFrom}
-              onChange={(e) => {
-                setFilterDateFrom(e.target.value);
-                setPage(1);
-              }}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              To Date
-            </label>
-            <input
-              data-cy="filter-date-to"
-              type="date"
-              value={filterDateTo}
-              onChange={(e) => {
-                setFilterDateTo(e.target.value);
-                setPage(1);
-              }}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
-              Hash
-            </label>
-            <input
-              data-cy="filter-hash"
-              type="text"
-              placeholder="Search hash..."
-              value={searchHash}
-              onChange={(e) => {
-                setSearchHash(e.target.value);
-                setPage(1);
-              }}
-              className="w-full rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-700 dark:text-white"
-            />
-          </div>
-
-          {hasActiveFilters && (
-            <div className="flex items-end">
-              <button
-                data-cy="clear-filters-btn"
-                onClick={clearFilters}
-                className="w-full rounded-lg bg-zinc-200 px-3 py-1.5 text-sm font-medium hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600"
+      {/* ── Table ──────────────────────────────────────────────────────────── */}
+      <div className="overflow-x-auto rounded-xl border border-zinc-100 dark:border-zinc-800">
+        <table className="min-w-full divide-y divide-zinc-100 dark:divide-zinc-800" role="grid">
+          <thead className="bg-zinc-50 dark:bg-zinc-800/50">
+            <tr>
+              <ColHeader field="date" label="Date" />
+              <th
+                scope="col"
+                className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
               >
-                Clear
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Results info */}
-      <div className="mb-4 flex items-center justify-between text-sm">
-        <p data-cy="results-count" className="text-zinc-600 dark:text-zinc-400">
-          Showing {paginatedTransactions.length > 0 ? (page - 1) * itemsPerPage + 1 : 0}–
-          {Math.min(page * itemsPerPage, sortedTransactions.length)} of{" "}
-          {sortedTransactions.length} transactions
-        </p>
-
-        <select
-          data-cy="items-per-page"
-          value={itemsPerPage}
-          onChange={(e) => {
-            setItemsPerPage(parseInt(e.target.value) as ItemsPerPage);
-            setPage(1);
-          }}
-          className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
-        >
-          <option value={25}>25 per page</option>
-          <option value={50}>50 per page</option>
-          <option value={100}>100 per page</option>
-        </select>
-      </div>
-
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table data-cy="transactions-table" className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-200 dark:border-zinc-700">
-              <th className="text-left px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">
-                <button
-                  onClick={() => handleSort("date")}
-                  className="flex items-center gap-1 hover:text-blue-600 dark:hover:text-blue-400"
-                >
-                  Date
-                  {sortKey === "date" && (
-                    <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                  )}
-                </button>
+                Type
               </th>
-              <th className="text-left px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">
-                <button
-                  onClick={() => handleSort("type")}
-                  className="flex items-center gap-1 hover:text-blue-600 dark:hover:text-blue-400"
-                >
-                  Type
-                  {sortKey === "type" && (
-                    <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                  )}
-                </button>
-              </th>
-              <th className="text-right px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">
-                <button
-                  onClick={() => handleSort("amount")}
-                  className="flex items-center gap-1 ml-auto hover:text-blue-600 dark:hover:text-blue-400"
-                >
-                  Amount
-                  {sortKey === "amount" && (
-                    <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                  )}
-                </button>
-              </th>
-              <th className="text-left px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">
-                <button
-                  onClick={() => handleSort("status")}
-                  className="flex items-center gap-1 hover:text-blue-600 dark:hover:text-blue-400"
-                >
-                  Status
-                  {sortKey === "status" && (
-                    <span>{sortOrder === "asc" ? "↑" : "↓"}</span>
-                  )}
-                </button>
-              </th>
-              <th className="text-left px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-50">
+              <ColHeader field="amount" label="Amount" />
+              <ColHeader field="status" label="Status" />
+              <th
+                scope="col"
+                className="whitespace-nowrap px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400"
+              >
                 Hash
               </th>
             </tr>
           </thead>
-          <tbody>
-            {loading ? (
+          <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+            {pageRows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-8 text-center">
-                  <div className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-900 dark:border-zinc-700 dark:border-t-zinc-100" />
-                </td>
-              </tr>
-            ) : paginatedTransactions.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={5}
-                  className="px-4 py-8 text-center text-zinc-500 dark:text-zinc-400"
-                >
-                  No transactions found
+                <td colSpan={5} className="py-10 text-center text-sm text-zinc-400">
+                  No transactions found.
                 </td>
               </tr>
             ) : (
-              paginatedTransactions.map((tx) => (
+              pageRows.map((tx) => (
                 <tr
-                  key={tx.id}
-                  data-cy={`tx-row-${tx.id}`}
-                  className="border-b border-zinc-100 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800/50 transition-colors"
+                  key={tx.hash}
+                  className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40 focus-within:bg-zinc-50 dark:focus-within:bg-zinc-800/40"
                 >
-                  <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
-                    {new Date(tx.date).toLocaleDateString()} (
-                    {new Date(tx.date).toLocaleTimeString()})
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-zinc-700 dark:text-zinc-300">
+                    {new Date(tx.date).toLocaleString()}
                   </td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-1 text-xs font-semibold ${
-                        tx.type === "deposit"
-                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                          : tx.type === "withdraw"
-                            ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                            : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                      }`}
-                    >
-                      {tx.type.charAt(0).toUpperCase() + tx.type.slice(1)}
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${TYPE_BADGE[tx.type]}`}>
+                      {tx.type}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-zinc-900 dark:text-zinc-100">
-                    {tx.amount.toFixed(2)}
+                  <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-zinc-700 dark:text-zinc-300">
+                    {tx.amount}
                   </td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`inline-block rounded-full px-2 py-1 text-xs font-semibold ${
-                        tx.status === "success"
-                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                          : tx.status === "pending"
-                            ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-                            : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                      }`}
-                    >
-                      {tx.status.charAt(0).toUpperCase() + tx.status.slice(1)}
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${STATUS_BADGE[tx.status]}`}>
+                      {tx.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="whitespace-nowrap px-4 py-3">
                     <a
-                      data-cy={`tx-explorer-link-${tx.id}`}
-                      href={`https://stellar.expert/explorer/public/tx/${tx.hash}`}
+                      href={`${explorerBase}/${tx.hash}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-1 font-mono text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                      className="font-mono text-sm text-blue-600 hover:underline dark:text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+                      aria-label={`View transaction ${tx.hash} on block explorer`}
                     >
-                      {tx.hash.slice(0, 12)}…
-                      <ExternalLink size={14} />
+                      {shortHash(tx.hash)}
                     </a>
                   </td>
                 </tr>
@@ -468,33 +324,69 @@ export default function TransactionHistory() {
         </table>
       </div>
 
-      {/* Pagination */}
-      <div className="mt-6 flex items-center justify-between">
-        <button
-          data-cy="prev-page-btn"
-          onClick={() => setPage(Math.max(1, page - 1))}
-          disabled={page === 1}
-          className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-        >
-          <ChevronLeft size={16} />
-          Previous
-        </button>
+      {/* ── Pagination ──────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-500 dark:text-zinc-400">
+        {/* Result count */}
+        <span>
+          {sorted.length === 0
+            ? "No results"
+            : `${(safePage - 1) * pageSize + 1}–${Math.min(safePage * pageSize, sorted.length)} of ${sorted.length}`}
+        </span>
 
-        <div data-cy="page-info" className="text-sm text-zinc-600 dark:text-zinc-400">
-          Page <span className="font-semibold">{page}</span> of{" "}
-          <span className="font-semibold">{totalPages}</span>
+        {/* Page size picker */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="tx-page-size" className="text-xs">Rows</label>
+          <select
+            id="tx-page-size"
+            value={pageSize}
+            onChange={(e) => { setPageSize(Number(e.target.value) as PageSizeOption); resetPage(); }}
+            className="h-8 rounded border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
         </div>
 
-        <button
-          data-cy="next-page-btn"
-          onClick={() => setPage(Math.min(totalPages, page + 1))}
-          disabled={page === totalPages}
-          className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
-        >
-          Next
-          <ChevronRight size={16} />
-        </button>
+        {/* Page navigation */}
+        <nav aria-label="Pagination" className="flex items-center gap-1">
+          <button
+            onClick={() => setPage(1)}
+            disabled={safePage === 1}
+            className="rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40"
+            aria-label="First page"
+          >
+            «
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={safePage === 1}
+            className="rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40"
+            aria-label="Previous page"
+          >
+            ‹
+          </button>
+          <span className="px-2">
+            {safePage} / {totalPages}
+          </span>
+          <button
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={safePage === totalPages}
+            className="rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40"
+            aria-label="Next page"
+          >
+            ›
+          </button>
+          <button
+            onClick={() => setPage(totalPages)}
+            disabled={safePage === totalPages}
+            className="rounded px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-40"
+            aria-label="Last page"
+          >
+            »
+          </button>
+        </nav>
       </div>
-    </div>
+    </section>
   );
 }

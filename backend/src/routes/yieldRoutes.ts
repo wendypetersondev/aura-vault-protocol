@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { createYieldService, YieldSource, VaultPosition } from "../services/yieldService.js";
+import { getLastRunStats, getRunHistory, isYieldWorkerRunning } from "../services/yieldWorker.js";
 
 const yieldService = createYieldService();
 
@@ -61,5 +62,30 @@ yieldRouter.post("/backfill", async (req: Request, res: Response): Promise<void>
   } catch (err) {
     console.error("[yield/backfill]", err);
     res.status(500).json({ error: "Backfill failed" });
+  }
+});
+
+/**
+ * GET /api/v1/yield/stats
+ * Returns last hourly worker run stats and optional history for monitoring.
+ * Query params: ?history=N (default 0 — omit history)
+ */
+yieldRouter.get("/stats", async (req: Request, res: Response): Promise<void> => {
+  const historyLimit = Math.min(200, Math.max(0, parseInt((req.query.history as string) ?? "0", 10)));
+
+  try {
+    const [lastRun, history] = await Promise.all([
+      getLastRunStats(),
+      historyLimit > 0 ? getRunHistory(historyLimit) : Promise.resolve([] as Awaited<ReturnType<typeof getRunHistory>>),
+    ]);
+
+    res.json({
+      workerRunning: isYieldWorkerRunning(),
+      lastRun,
+      history: historyLimit > 0 ? history : undefined,
+    });
+  } catch (err) {
+    console.error("[yield/stats]", err);
+    res.status(500).json({ error: "Failed to retrieve yield stats" });
   }
 });

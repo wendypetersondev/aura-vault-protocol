@@ -24,6 +24,7 @@ import { startWorker, stopWorker } from "./queue.js";
 import { queueRouter } from "./routes/queueRoutes.js";
 import { warmCache } from "./services/defi.js";
 import { startEmailWorker, stopEmailWorker } from "./services/emailQueue.js";
+import { startYieldWorker, stopYieldWorker } from "./services/yieldWorker.js";
 
 const app = express();
 app.use(cors());
@@ -100,6 +101,7 @@ const PORT = Number.parseInt(process.env.PORT ?? "3001", 10);
 const server = app.listen(PORT, () => {
   startWorker();
   startEmailWorker();
+  startYieldWorker();
   void warmCache();
   console.log(`Aura Vault backend running on port ${PORT}`);
 });
@@ -108,6 +110,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[shutdown] received ${signal}`);
   stopWorker();
   stopEmailWorker();
+  stopYieldWorker();
   server.close(async () => {
     await disconnectRedis().catch((err) => {
       console.error("[shutdown] redis disconnect failed:", err);
