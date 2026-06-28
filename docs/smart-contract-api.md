@@ -219,6 +219,16 @@ stellar contract invoke \
   --shares 500000
 ```
 
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("withdraw", {
+  caller: userKeypair.publicKey(),
+  shares: BigInt(500_000),
+});
+// result.value === underlying tokens redeemed (i128 as BigInt)
+```
+
 ---
 
 ### `harvest`
@@ -276,6 +286,17 @@ stellar contract invoke \
   --yield_amount 50000
 ```
 
+**Example (JavaScript SDK)**
+
+```ts
+// Only the admin keypair will pass require_auth
+const result = await contract.call("harvest", {
+  caller: adminKeypair.publicKey(),
+  yield_amount: BigInt(50_000),
+});
+// result.value === void (Ok(()))
+```
+
 ---
 
 ### `pause`
@@ -291,6 +312,12 @@ pub fn pause(env: Env) -> Result<(), VaultError>
 **Errors**: `NotInitialized` if not yet initialized.
 
 **Events emitted**: `topic: ("paused",), data: ()`
+
+**Example (JavaScript SDK)**
+
+```ts
+await contract.call("pause", {});
+```
 
 ---
 
@@ -308,6 +335,12 @@ pub fn unpause(env: Env) -> Result<(), VaultError>
 
 **Events emitted**: `topic: ("unpaused",), data: ()`
 
+**Example (JavaScript SDK)**
+
+```ts
+await contract.call("unpause", {});
+```
+
 ---
 
 ### `is_paused`
@@ -322,6 +355,13 @@ pub fn is_paused(env: Env) -> bool
 
 No authorization required. No state changes. No ledger writes.
 
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("is_paused", {});
+const paused: boolean = result.value;
+```
+
 ---
 
 ### `total_assets`
@@ -335,6 +375,13 @@ pub fn total_assets(env: Env) -> i128
 ```
 
 No authorization required. No ledger writes.
+
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("total_assets", {});
+const total: bigint = result.value; // i128 as BigInt
+```
 
 ---
 
@@ -366,6 +413,15 @@ stellar contract invoke \
   --address GUSER...
 ```
 
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("balance_of", {
+  address: userKeypair.publicKey(),
+});
+const shares: bigint = result.value; // i128 as BigInt, 0n for unknown addresses
+```
+
 ---
 
 ### `transfer_admin`
@@ -394,6 +450,14 @@ pub fn transfer_admin(
 ```
 topic: ("admin_transferred",)
 data:  (old_admin: Address, new_admin: Address)
+```
+
+**Example (JavaScript SDK)**
+
+```ts
+await contract.call("transfer_admin", {
+  new_admin: newAdminKeypair.publicKey(),
+});
 ```
 
 ---
@@ -434,6 +498,18 @@ topic: ("upgrade",)
 data:  (admin: Address, new_version: u32, new_wasm_hash: BytesN<32>)
 ```
 
+**Example (JavaScript SDK)**
+
+```ts
+import { xdr, hash } from "@stellar/stellar-sdk";
+
+// new_wasm_hash is the 32-byte hash returned by `stellar contract upload`
+const newWasmHash = Buffer.from("<64-hex-chars>", "hex");
+await contract.call("upgrade", {
+  new_wasm_hash: newWasmHash,
+});
+```
+
 ---
 
 ### `version`
@@ -472,6 +548,16 @@ pub fn set_fees(
 
 **Errors**: `NotInitialized`; invalid values rejected by `fee::validate_fees`.
 
+**Example (JavaScript SDK)**
+
+```ts
+// 200 bps = 2% performance fee, 50 bps = 0.5% management fee
+await contract.call("set_fees", {
+  perf_fee_bps: 200,
+  mgmt_fee_bps: 50,
+});
+```
+
 ---
 
 ### `set_treasury`
@@ -482,6 +568,14 @@ Set the treasury address that receives collected fees. Admin only.
 
 ```rust
 pub fn set_treasury(env: Env, treasury: Address) -> Result<(), VaultError>
+```
+
+**Example (JavaScript SDK)**
+
+```ts
+await contract.call("set_treasury", {
+  treasury: treasuryKeypair.publicKey(),
+});
 ```
 
 ---
@@ -496,6 +590,14 @@ Read-only: returns `(perf_fee_bps: u32, mgmt_fee_bps: u32)`.
 pub fn get_fees(env: Env) -> (u32, u32)
 ```
 
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("get_fees", {});
+const [perfFeeBps, mgmtFeeBps]: [number, number] = result.value;
+// e.g. [200, 50]
+```
+
 ---
 
 ### `total_fees_collected`
@@ -506,6 +608,13 @@ Read-only: returns total fees accrued but not yet withdrawn to the treasury.
 
 ```rust
 pub fn total_fees_collected(env: Env) -> i128
+```
+
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("total_fees_collected", {});
+const fees: bigint = result.value; // i128 as BigInt
 ```
 
 ---
@@ -523,6 +632,13 @@ pub fn withdraw_fees(env: Env) -> Result<i128, VaultError>
 **Returns** `Ok(fees_transferred: i128)`.
 
 **Errors**: `NotInitialized`, `InvalidAddress` (no treasury set).
+
+**Example (JavaScript SDK)**
+
+```ts
+const result = await contract.call("withdraw_fees", {});
+const transferred: bigint = result.value; // tokens sent to treasury
+```
 
 ---
 
@@ -587,13 +703,78 @@ a Soroban event streaming subscription.
 
 ## Gas / Resource Notes
 
-- **Read-only functions** (`total_assets`, `balance_of`, `is_paused`, `version`,
-  `get_fees`, `total_fees_collected`): no state writes, no TTL bumps. These are
-  essentially free simulation calls.
-- **Mutating functions** (`deposit`, `withdraw`, `harvest`): each bumps two
-  storage entries (`bump_instance` + `bump_persistent` on the caller's balance
-  key). Under high-frequency load this generates 2× ledger write operations per
-  call — monitor Soroban fee usage and consider conditional bumping if hitting
-  per-ledger resource limits.
-- **`upgrade`**: performs an atomic Wasm replacement. This is one of the most
-  resource-intensive Soroban operations; plan upgrades during low-traffic windows.
+Soroban charges fees in **stroops** (1 XLM = 10,000,000 stroops) based on CPU
+instructions, memory, ledger reads/writes, and network bandwidth consumed per
+transaction.  The table below gives approximate ranges observed on Testnet; mainnet
+fees scale with ledger state and network congestion.
+
+### Approximate Fee Table
+
+| Function | Ledger entries read | Ledger entries written | Typical fee (stroops) | Notes |
+|---|---|---|---|---|
+| `initialize` | 0 | 3 (admin, token, version) | ~500,000 | One-time cost |
+| `deposit` | 3 | 4 (balance, total_shares, total_deposited, TTL) | ~800,000–1,200,000 | Scales slightly with share arithmetic |
+| `withdraw` | 4 | 4 | ~900,000–1,300,000 | Similar to deposit |
+| `harvest` | 3 | 2 (total_deposited, TTL) | ~700,000–1,000,000 | No balance key write for caller |
+| `pause` / `unpause` | 1 | 1 | ~300,000 | Minimal state change |
+| `is_paused` | 1 | 0 | ~50,000 | Simulation only — no ledger write |
+| `total_assets` | 1 | 0 | ~50,000 | Simulation only |
+| `balance_of` | 1 | 0 | ~50,000 | Simulation only |
+| `transfer_admin` | 1 | 1 | ~300,000 | — |
+| `upgrade` | 2 | 2 + Wasm upload | ~2,000,000–5,000,000 | Plan during low-traffic windows |
+| `version` | 1 | 0 | ~50,000 | Simulation only |
+| `set_fees` | 1 | 1 | ~300,000 | — |
+| `set_treasury` | 1 | 1 | ~300,000 | — |
+| `get_fees` | 1 | 0 | ~50,000 | Simulation only |
+| `total_fees_collected` | 1 | 0 | ~50,000 | Simulation only |
+| `withdraw_fees` | 3 | 2 | ~700,000 | Includes token transfer |
+
+> **How to get exact fees:** Use `stellar contract simulate` before submitting any
+> transaction.  The simulator returns the exact resource cost breakdown.
+
+```bash
+stellar contract simulate \
+  --id <CONTRACT_ID> \
+  --source <KEYPAIR> \
+  --network testnet \
+  -- deposit \
+  --caller GUSER... \
+  --amount 1000000
+# Output includes: cpu_insns, mem_bytes, ledger_reads, ledger_writes, min_resource_fee
+```
+
+### TTL / Archival Costs
+
+Every mutating function calls `bump_instance` (30-day lifetime, 7-day threshold)
+and `bump_persistent` on the caller's balance key.  If an entry has already been
+bumped within the threshold window Soroban skips the write, so the actual ledger
+write count may be lower than the table shows under normal usage.
+
+Under high-frequency load (many deposits/withdrawals per ledger) the two bump
+operations per call become the dominant cost driver.  If you are building an
+automated keeper or batching tool, consider tracking the last-bumped ledger and
+skipping voluntary bumps when the entry is already near its maximum TTL.
+
+---
+
+## Soroban Natspec Note
+
+Soroban is a Rust (`no_std`) environment — there is no Solidity or EVM ABI.
+This document **is** the canonical API reference for `AuraVault`.
+
+The Rust source uses standard `///` doc-comments on every public function and
+type.  To view them locally:
+
+```bash
+cd aura-vault
+cargo doc --open
+```
+
+This generates an HTML reference in `target/doc/aura_vault/`.  The content
+mirrors the signatures and parameter tables in this document, but the HTML view
+includes cross-links to internal types and trait implementations.
+
+> **For Solidity/EVM developers:** think of Soroban `#[contractimpl]` as the
+> equivalent of a Solidity contract's public ABI, and `VaultError` variants as
+> the equivalent of `revert` reasons.  There is no ABI JSON file — the interface
+> is defined by `aura-vault/src/interface.rs` (`AuraVaultTrait`).
