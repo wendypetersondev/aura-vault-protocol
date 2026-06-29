@@ -56,7 +56,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Notification[]>([]);
 
   useEffect(() => {
-    setNotifications(loadHistory());
+    const history = loadHistory();
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (history.length > 0) {
+      setNotifications(history);
+    }
   }, []);
 
   const toast = useCallback((type: NotificationType, title: string, message?: string) => {
@@ -116,7 +120,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           <div
             key={n.id}
             role="status"
-            className={`flex items-start gap-3 rounded-lg border p-3 shadow-lg backdrop-blur-sm animate-in slide-in-from-right duration-300 ${
+            className={`flex items-start gap-3 rounded-lg border p-3 shadow-lg backdrop-blur-sm animate-toast-in ${
               n.type === "success" ? "bg-emerald-50 dark:bg-emerald-950/80 border-emerald-200 dark:border-emerald-800" :
               n.type === "error" ? "bg-red-50 dark:bg-red-950/80 border-red-200 dark:border-red-800" :
               n.type === "warning" ? "bg-amber-50 dark:bg-amber-950/80 border-amber-200 dark:border-amber-800" :

@@ -6,6 +6,8 @@ export const NS = {
   AUTH_REFRESH: "auth:refresh",
   AUTH_SESSIONS: "auth:sessions",
   API: "api",
+  GAS_PRICE: "gas:price",
+  GAS_HISTORY: "gas:history",
   DEFI_PRICE: "defi:price",
   DEFI_POOLS: "defi:pools",
   // Email service
@@ -19,6 +21,9 @@ export const NS = {
   EMAIL_RETRY: "email:retry",
   EMAIL_DEAD: "email:dead",
   EMAIL_INFLIGHT: "email:inflight",
+  // Yield worker
+  YIELD_STATS: "yield:stats",
+  YIELD_HISTORY: "yield:history",
 } as const;
 
 export type Namespace = (typeof NS)[keyof typeof NS];

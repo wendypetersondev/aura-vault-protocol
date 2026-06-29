@@ -83,9 +83,22 @@ variable "db_username" {
 }
 
 variable "db_password" {
-  description = "Database master password"
+  description = "Deprecated. Database passwords are generated and rotated through AWS Secrets Manager."
   type        = string
   sensitive   = true
+  default     = null
+}
+
+variable "secrets_rotation_lambda_arn" {
+  description = "Lambda ARN used by AWS Secrets Manager to rotate application API credentials."
+  type        = string
+  default     = ""
+}
+
+variable "secret_recovery_window_days" {
+  description = "Recovery window before deleted secrets are permanently removed."
+  type        = number
+  default     = 30
 }
 
 variable "enable_cloudfront" {
