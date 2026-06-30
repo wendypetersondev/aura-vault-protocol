@@ -10,6 +10,8 @@ pub use errors::VaultError;
 
 #[cfg(test)]
 mod test;
+#[cfg(test)]
+mod security_test;
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec, Symbol};
 
